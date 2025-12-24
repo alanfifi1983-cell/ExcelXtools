@@ -4,124 +4,140 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>KeyHub Pro - 雲端遊戲序號銷售系統</title>
-    <!-- 載入必要庫 -->
+    <!-- 核心函式庫 -->
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+    
+    <!-- Firebase SDK (Compat 模式最為穩定) -->
+    <script src="https://www.gstatic.com/firebasejs/11.0.2/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/11.0.2/firebase-firestore-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/11.0.2/firebase-auth-compat.js"></script>
+    
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&display=swap" rel="stylesheet">
     
     <style>
-        body { font-family: 'Noto Sans TC', sans-serif; }
-        .no-scrollbar::-webkit-scrollbar { display: none; }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        body { font-family: 'Noto Sans TC', sans-serif; background-color: #f8fafc; }
         .animate-fade-in { animation: fadeIn 0.4s ease-out forwards; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        /* 滾動條美化 */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: #f1f1f1; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
     </style>
 </head>
-<body class="bg-slate-50 text-slate-900">
+<body>
     <div id="root"></div>
 
     <script type="text/babel">
         const { useState, useEffect, useMemo, useRef } = React;
 
-        // --- Firebase 模組化導入 (透過 window 物件) ---
-        // 假設環境會注入 firebaseConfig, __app_id, __initial_auth_token
-        const firebaseConfig = JSON.parse(window.__firebase_config || '{}');
-        const appId = window.__app_id || 'game-key-store';
-        
-        // 這些函式會從全域 Firebase SDK 中取得，此處模擬架構
-        // 在實際 HTML 中需引入 Firebase SDK Scripts
-    </script>
-
-    <!-- 載入 Firebase SDK (v11) -->
-    <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-app.js";
-        import { getFirestore, collection, doc, setDoc, getDoc, getDocs, updateDoc, onSnapshot, deleteDoc, query, where } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-firestore.js";
-        import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-auth.js";
-
-        // 將 Firebase 實體掛載到全域，方便 React 組件使用
-        window.FB = { initializeApp, getFirestore, collection, doc, setDoc, getDoc, getDocs, updateDoc, onSnapshot, deleteDoc, query, where, getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken };
-    </script>
-
-    <script type="text/babel">
         const App = () => {
             const [view, setView] = useState('login'); 
-            const [user, setUser] = useState(null); 
             const [appUser, setAppUser] = useState(null); 
             const [loading, setLoading] = useState(true);
+            const [db, setDb] = useState(null);
+            const [currentAppId, setCurrentAppId] = useState('');
+            const [configMissing, setConfigMissing] = useState(false);
+            
             const [products, setProducts] = useState([]);
             const [inventory, setInventory] = useState([]);
             const [systemUsers, setSystemUsers] = useState([]);
-            const [mailSettings, setMailSettings] = useState({ serviceId: '', templateId: '', publicKey: '', active: false });
             
             const [selectedProduct, setSelectedProduct] = useState(null);
             const [editingProduct, setEditingProduct] = useState(null);
             const [isProductModalOpen, setIsProductModalOpen] = useState(false);
-            const [productToDelete, setProductToDelete] = useState(null);
             
             const [cartItem, setCartItem] = useState(null);
             const [emailInput, setEmailInput] = useState("");
             const [invoiceInput, setInvoiceInput] = useState("");
-            
             const [loginForm, setLoginForm] = useState({ username: '', password: '' });
             const [imagePreview, setImagePreview] = useState("");
             const fileInputRef = useRef(null);
 
-            // --- 初始化 Firebase 與 資料監聽 ---
+            // --- 核心：Firebase 初始化 ---
             useEffect(() => {
-                const init = async () => {
-                    if (!window.FB) return setTimeout(init, 100);
-                    const { initializeApp, getFirestore, getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged, collection, onSnapshot, doc, setDoc } = window.FB;
-                    
-                    const firebaseConfig = JSON.parse(window.__firebase_config || '{}');
-                    const app = initializeApp(firebaseConfig);
-                    const db = getFirestore(app);
-                    const auth = getAuth(app);
-                    const appId = window.__app_id || 'game-key-store';
-
-                    // 身份驗證
-                    if (window.__initial_auth_token) {
-                        await signInWithCustomToken(auth, window.__initial_auth_token);
-                    } else {
-                        await signInAnonymously(auth);
-                    }
-
-                    onAuthStateChanged(auth, (u) => {
-                        setUser(u);
-                        setLoading(false);
-                    });
-
-                    // 資料監聽
-                    onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'products'), (snap) => {
-                        setProducts(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-                    });
-
-                    onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'keys'), (snap) => {
-                        setInventory(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-                    });
-
-                    onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'mail'), (d) => {
-                        if (d.exists()) setMailSettings(d.data());
-                    });
-
-                    onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'users'), (snap) => {
-                        const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-                        if (list.length === 0) {
-                            setDoc(doc(collection(db, 'artifacts', appId, 'public', 'data', 'users')), { username: 'admin', password: '123', role: 'admin' });
+                const startSystem = async () => {
+                    try {
+                        // 優先讀取環境變數，若無則讀取 window 自定義變數（方便手動部署）
+                        const config = window.__firebase_config ? JSON.parse(window.__firebase_config) : window.LOCAL_FIREBASE_CONFIG;
+                        
+                        if (!config || !config.apiKey) {
+                            console.error("未偵測到 Firebase 配置");
+                            setConfigMissing(true);
+                            setLoading(false);
+                            return;
                         }
-                        setSystemUsers(list);
-                    });
+
+                        if (!firebase.apps.length) firebase.initializeApp(config);
+                        const firestore = firebase.firestore();
+                        const auth = firebase.auth();
+                        const appId = window.__app_id || 'keyhub-pro-v1';
+                        
+                        setCurrentAppId(appId);
+
+                        // 登入處理：支援 Token 或 匿名登入
+                        if (window.__initial_auth_token) {
+                            await auth.signInWithCustomToken(window.__initial_auth_token);
+                        } else {
+                            await auth.signInAnonymously();
+                        }
+
+                        auth.onAuthStateChanged(async (user) => {
+                            if (user) {
+                                setDb(firestore);
+                                setupDataListeners(firestore, appId);
+                            }
+                        });
+                    } catch (err) {
+                        console.error("系統啟動失敗:", err);
+                        setLoading(false);
+                    }
                 };
-                init();
+                startSystem();
             }, []);
 
-            // --- 核心邏輯 ---
+            // --- 資料監聽器 ---
+            const setupDataListeners = (dbInstance, appId) => {
+                // 所有的資料都存放在這個路徑下，方便多人共用同一套資料庫
+                const publicDataRef = dbInstance.collection('artifacts').doc(appId).collection('public').doc('data');
+
+                // 監聽商品
+                publicDataRef.collection('products').onSnapshot(snap => {
+                    setProducts(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+                });
+
+                // 監聽序號庫存
+                publicDataRef.collection('keys').onSnapshot(snap => {
+                    setInventory(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+                });
+
+                // 監聽使用者帳號 (確保 admin 存在)
+                publicDataRef.collection('users').onSnapshot(async (snap) => {
+                    const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+                    
+                    if (!list.some(u => u.username === 'admin')) {
+                        await publicDataRef.collection('users').add({
+                            username: 'admin',
+                            password: '123',
+                            role: 'admin',
+                            createdAt: new Date().toISOString()
+                        });
+                    }
+                    setSystemUsers(list);
+                    setLoading(false);
+                });
+            };
+
+            // --- 計算邏輯 ---
             const stockOverview = useMemo(() => {
                 const summary = {};
                 inventory.forEach(item => {
-                    const name = item.productName || "未分類";
+                    const name = item.productName || "未命名商品";
                     if (!summary[name]) summary[name] = { total: 0, available: 0, sold: 0 };
                     summary[name].total++;
                     if (item.status === 'available') summary[name].available++;
@@ -130,45 +146,41 @@
                 return Object.entries(summary).map(([name, stats]) => ({ name, ...stats }));
             }, [inventory]);
 
-            const uniqueNamesFromInventory = useMemo(() => stockOverview.map(s => s.name).sort(), [stockOverview]);
+            const getStockCount = (name) => stockOverview.find(s => s.name === name)?.available || 0;
 
-            const getStockCount = (name) => {
-                const found = stockOverview.find(s => s.name === name);
-                return found ? found.available : 0;
-            };
-
+            // --- 操作函式 ---
             const handleLogin = (e) => {
                 e.preventDefault();
-                const found = systemUsers.find(u => u.username === loginForm.username && u.password === loginForm.password);
-                if (found) { setAppUser(found); setView('shop'); }
-                else alert("帳號密碼錯誤");
-            };
-
-            const handleFileChange = (e) => {
-                const file = e.target.files[0];
-                if (file && file.size < 800000) {
-                    const reader = new FileReader();
-                    reader.onloadend = () => setImagePreview(reader.result);
-                    reader.readAsDataURL(file);
-                } else if (file) alert("檔案太大 (需小於800KB)");
+                const found = systemUsers.find(u => 
+                    u.username === loginForm.username.trim() && 
+                    u.password === loginForm.password.trim()
+                );
+                if (found) {
+                    setAppUser(found);
+                    setView('shop');
+                } else {
+                    alert("帳號或密碼錯誤");
+                }
             };
 
             const handleSaveProduct = async (e) => {
                 e.preventDefault();
-                const { doc, collection, setDoc, updateDoc, getFirestore, initializeApp } = window.FB;
-                const db = getFirestore();
                 const formData = new FormData(e.target);
                 const pData = {
                     name: formData.get('name').trim(),
                     price: Number(formData.get('price')),
-                    image: imagePreview || formData.get('image'),
+                    image: imagePreview || formData.get('image') || 'https://via.placeholder.com/400x500?text=No+Image',
                     description: formData.get('description'),
-                    isActive: formData.get('isActive') === 'on'
+                    isActive: formData.get('isActive') === 'on',
+                    updatedAt: new Date().toISOString()
                 };
-                const pRef = editingProduct?.id 
-                    ? doc(db, 'artifacts', appId, 'public', 'data', 'products', editingProduct.id)
-                    : doc(collection(db, 'artifacts', appId, 'public', 'data', 'products'));
-                await setDoc(pRef, pData, { merge: true });
+
+                const col = db.collection('artifacts').doc(currentAppId).collection('public').doc('data').collection('products');
+                if (editingProduct?.id) {
+                    await col.doc(editingProduct.id).update(pData);
+                } else {
+                    await col.add({ ...pData, createdAt: new Date().toISOString() });
+                }
                 setIsProductModalOpen(false);
                 setEditingProduct(null);
                 setImagePreview("");
@@ -179,18 +191,17 @@
                 if (!file) return;
                 const reader = new FileReader();
                 reader.onload = async (evt) => {
-                    const { doc, collection, setDoc, getFirestore } = window.FB;
-                    const db = getFirestore();
                     const workbook = XLSX.read(evt.target.result, { type: 'array' });
                     const rawData = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]]);
+                    const col = db.collection('artifacts').doc(currentAppId).collection('public').doc('data').collection('keys');
                     let count = 0;
                     for (const row of rawData) {
-                        const name = row.Product_Name || row.productName || row['品名'];
-                        const key = row.Serial_Key || row.serialKey || row['序號'];
+                        const name = row.Product_Name || row.productName || row['品名'] || row.Product;
+                        const key = row.Serial_Key || row.serialKey || row['序號'] || row.Key;
                         if (name && key) {
-                            await setDoc(doc(collection(db, 'artifacts', appId, 'public', 'data', 'keys')), {
-                                productName: name.toString().trim(),
-                                key: key.toString().trim(),
+                            await col.add({
+                                productName: String(name).trim(),
+                                key: String(key).trim(),
                                 importTime: new Date().toISOString(),
                                 status: 'available',
                                 soldTime: null,
@@ -199,7 +210,7 @@
                             count++;
                         }
                     }
-                    alert(`成功匯入 ${count} 筆`);
+                    alert(`成功匯入 ${count} 筆序號`);
                 };
                 reader.readAsArrayBuffer(file);
             };
@@ -209,87 +220,143 @@
                 const available = inventory.find(k => k.productName === cartItem.name && k.status === 'available');
                 if (!available) return alert("庫存不足");
 
-                const { doc, updateDoc, getFirestore } = window.FB;
-                const db = getFirestore();
-                const invNo = invoiceInput || `INV-${Date.now().toString().slice(-6)}`;
-                const soldTime = new Date().toISOString();
+                const invNo = invoiceInput || `INV-${Date.now().toString().slice(-8)}`;
                 
-                await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'keys', available.id), {
-                    status: 'sold', soldTime, invoiceNumber: invNo, customerEmail: emailInput || "現場取號", soldBy: appUser.username
+                await db.collection('artifacts').doc(currentAppId).collection('public').doc('data').collection('keys').doc(available.id).update({
+                    status: 'sold', 
+                    soldTime: new Date().toISOString(), 
+                    invoiceNumber: invNo, 
+                    customerEmail: emailInput || "現場交易", 
+                    soldBy: appUser.username
                 });
 
                 if (type === 'print') {
-                    const win = window.open('', '_blank', 'width=300,height=600');
-                    win.document.write(`<html><body style="font-family:sans-serif;width:80mm;padding:10mm;">
-                        <center><b>KEYHUB 數位收據</b></center><hr>
-                        <div>日期: ${new Date().toLocaleString()}</div>
-                        <div>單號: ${invNo}</div>
-                        <div>銷售: ${appUser.username}</div><hr>
-                        <div>品名: ${cartItem.name}</div>
-                        <div>金額: NT$ ${cartItem.price}</div><hr>
-                        <center>序號: <br><div style="border:1px solid #000;padding:10px;margin:10px 0;">${available.key}</div></center>
-                    </body></html>`);
+                    const win = window.open('', '_blank', 'width=350,height=600');
+                    win.document.write(`
+                        <html><body style="font-family:sans-serif;padding:20px;text-align:center;">
+                            <h2 style="margin-bottom:5px;">KEYHUB 收據</h2>
+                            <p style="font-size:12px;color:gray;">${new Date().toLocaleString()}</p>
+                            <hr/>
+                            <div style="text-align:left;margin:20px 0;">
+                                <b>項目：</b>${cartItem.name}<br/>
+                                <b>金額：</b>NT$ ${cartItem.price}<br/>
+                                <b>單號：</b>${invNo}
+                            </div>
+                            <div style="background:#f4f4f4;padding:15px;border:2px dashed #333;font-size:18px;font-weight:bold;word-break:break-all;">
+                                ${available.key}
+                            </div>
+                            <p style="font-size:10px;margin-top:20px;">感謝您的購買，請妥善保管此序號。</p>
+                        </body></html>
+                    `);
                     win.document.close();
+                    win.focus();
                     win.print();
                     win.close();
-                } else alert(`發信指令已紀錄\n序號：${available.key}`);
-                
+                } else {
+                    alert(`購買成功！\n序號：${available.key}\n已記錄至系統。`);
+                }
                 setCartItem(null); setEmailInput(""); setInvoiceInput("");
             };
 
-            if (loading) return <div className="h-screen flex items-center justify-center bg-slate-900 text-white"><i className="fa-solid fa-circle-notch fa-spin mr-3 text-2xl"></i> 加載雲端系統...</div>;
+            // --- 視圖渲染 ---
+            if (configMissing) return (
+                <div className="h-screen flex items-center justify-center bg-slate-100 p-6">
+                    <div className="bg-white p-8 rounded-3xl shadow-xl max-w-md text-center">
+                        <i className="fa-solid fa-triangle-exclamation text-amber-500 text-5xl mb-4"></i>
+                        <h2 className="text-xl font-bold mb-2">未設定 Firebase 配置</h2>
+                        <p className="text-slate-500 text-sm mb-6">請在代碼中設定 LOCAL_FIREBASE_CONFIG 以便在外部環境執行。</p>
+                        <code className="block bg-slate-50 p-4 rounded-xl text-xs text-left overflow-x-auto">
+                            window.LOCAL_FIREBASE_CONFIG = &#123;<br/>
+                            &nbsp;&nbsp;apiKey: "...",<br/>
+                            &nbsp;&nbsp;authDomain: "..."<br/>
+                            &#125;;
+                        </code>
+                    </div>
+                </div>
+            );
+
+            if (loading) return (
+                <div className="h-screen flex flex-col items-center justify-center bg-slate-900 text-white">
+                    <div className="relative w-16 h-16 mb-6">
+                        <div className="absolute inset-0 border-4 border-indigo-500/20 rounded-full"></div>
+                        <div className="absolute inset-0 border-4 border-t-indigo-500 rounded-full animate-spin"></div>
+                    </div>
+                    <p className="font-bold tracking-widest animate-pulse">KEYHUB 安全連線中...</p>
+                </div>
+            );
 
             if (view === 'login') return (
                 <div className="h-screen bg-slate-100 flex items-center justify-center p-6">
                     <div className="bg-white w-full max-w-md p-10 rounded-[2.5rem] shadow-2xl border border-white animate-fade-in text-center">
-                        <div className="bg-indigo-600 w-16 h-16 rounded-2xl text-white flex items-center justify-center mx-auto mb-6 shadow-xl"><i className="fa-solid fa-shield-halved text-2xl"></i></div>
-                        <h1 className="text-3xl font-black mb-2 uppercase tracking-tighter">KEYHUB <span className="text-indigo-600">PRO</span></h1>
-                        <p className="text-slate-400 font-bold text-sm mb-8">請登入以開始進行銷售作業</p>
+                        <div className="bg-indigo-600 w-16 h-16 rounded-2xl text-white flex items-center justify-center mx-auto mb-6 shadow-xl shadow-indigo-200">
+                            <i className="fa-solid fa-shield-halved text-2xl"></i>
+                        </div>
+                        <h1 className="text-3xl font-black mb-2 tracking-tighter text-slate-800 italic">KEYHUB <span className="text-indigo-600">PRO</span></h1>
+                        <p className="text-slate-400 font-bold text-sm mb-8">多人雲端管理系統</p>
                         <form onSubmit={handleLogin} className="space-y-4 text-left">
-                            <div><label className="text-[10px] font-black text-slate-400 uppercase ml-1">帳號</label><input type="text" required className="w-full bg-slate-50 border-2 p-4 rounded-2xl outline-none focus:border-indigo-600 font-bold" value={loginForm.username} onChange={e => setLoginForm({...loginForm, username:e.target.value})}/></div>
-                            <div><label className="text-[10px] font-black text-slate-400 uppercase ml-1">密碼</label><input type="password" required className="w-full bg-slate-50 border-2 p-4 rounded-2xl outline-none focus:border-indigo-600 font-bold" value={loginForm.password} onChange={e => setLoginForm({...loginForm, password:e.target.value})}/></div>
-                            <button className="w-full py-5 bg-indigo-600 text-white font-black text-lg rounded-2xl hover:bg-indigo-700 shadow-xl shadow-indigo-100 transition">登入系統</button>
+                            <div className="space-y-1">
+                                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">管理員帳號</label>
+                                <input type="text" required className="w-full bg-slate-50 border-2 border-slate-100 p-4 rounded-2xl outline-none focus:border-indigo-600 font-bold transition-all" value={loginForm.username} onChange={e => setLoginForm({...loginForm, username:e.target.value})} placeholder="Admin Username"/>
+                            </div>
+                            <div className="space-y-1">
+                                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">登入密碼</label>
+                                <input type="password" required className="w-full bg-slate-50 border-2 border-slate-100 p-4 rounded-2xl outline-none focus:border-indigo-600 font-bold transition-all" value={loginForm.password} onChange={e => setLoginForm({...loginForm, password:e.target.value})} placeholder="Password"/>
+                            </div>
+                            <button className="w-full py-5 bg-indigo-600 text-white font-black text-lg rounded-2xl hover:bg-indigo-700 shadow-xl shadow-indigo-100 transition transform active:scale-95 mt-4">
+                                進入管理後台
+                            </button>
                         </form>
                     </div>
                 </div>
             );
 
             return (
-                <div className="min-h-screen bg-slate-50">
-                    <nav className="bg-white border-b sticky top-0 z-40 shadow-sm h-16 flex items-center px-6 justify-between">
+                <div className="min-h-screen bg-slate-50 flex flex-col">
+                    {/* 導航列 */}
+                    <nav className="bg-white border-b sticky top-0 z-40 shadow-sm h-16 flex items-center px-6 justify-between shrink-0">
                         <div className="flex items-center gap-2 cursor-pointer" onClick={() => setView('shop')}>
                             <div className="bg-indigo-600 p-1.5 rounded-lg text-white"><i className="fa-solid fa-bag-shopping"></i></div>
-                            <span className="font-black text-xl uppercase">KeyHub</span>
+                            <span className="font-black text-xl tracking-tighter">KeyHub</span>
                         </div>
                         <div className="flex bg-slate-100 p-1 rounded-xl gap-1">
-                            <button onClick={() => setView('shop')} className={`px-4 py-1.5 rounded-lg font-bold text-xs transition ${view === 'shop' || view === 'product_detail' ? 'bg-white shadow text-indigo-600' : 'text-slate-500'}`}>商店</button>
+                            <button onClick={() => setView('shop')} className={`px-5 py-1.5 rounded-lg font-bold text-xs transition ${view === 'shop' || view === 'product_detail' ? 'bg-white shadow text-indigo-600' : 'text-slate-500'}`}>商店</button>
                             {appUser.role === 'admin' && (
                                 <>
-                                    <button onClick={() => setView('admin_products')} className={`px-4 py-1.5 rounded-lg font-bold text-xs transition ${view === 'admin_products' ? 'bg-white shadow text-indigo-600' : 'text-slate-500'}`}>商品</button>
-                                    <button onClick={() => setView('admin_keys')} className={`px-4 py-1.5 rounded-lg font-bold text-xs transition ${view === 'admin_keys' ? 'bg-white shadow text-indigo-600' : 'text-slate-500'}`}>庫存</button>
-                                    <button onClick={() => setView('admin_accounts')} className={`px-4 py-1.5 rounded-lg font-bold text-xs transition ${view === 'admin_accounts' ? 'bg-white shadow text-indigo-600' : 'text-slate-500'}`}>帳號</button>
+                                    <button onClick={() => setView('admin_products')} className={`px-5 py-1.5 rounded-lg font-bold text-xs transition ${view === 'admin_products' ? 'bg-white shadow text-indigo-600' : 'text-slate-500'}`}>商品管理</button>
+                                    <button onClick={() => setView('admin_keys')} className={`px-5 py-1.5 rounded-lg font-bold text-xs transition ${view === 'admin_keys' ? 'bg-white shadow text-indigo-600' : 'text-slate-500'}`}>序號庫存</button>
                                 </>
                             )}
                         </div>
                         <div className="flex items-center gap-3">
-                            <div className="text-right hidden sm:block"><p className="text-[10px] font-black text-slate-400">{appUser.role.toUpperCase()}</p><p className="text-xs font-black text-indigo-600">{appUser.username}</p></div>
-                            <button onClick={() => setView('login')} className="p-2 bg-slate-100 rounded-lg text-slate-400 hover:text-red-500"><i className="fa-solid fa-right-from-bracket"></i></button>
+                            <div className="text-right hidden sm:block">
+                                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none">{appUser.role}</p>
+                                <p className="text-xs font-black text-indigo-600 leading-none mt-1">{appUser.username}</p>
+                            </div>
+                            <button onClick={() => {setAppUser(null); setView('login');}} className="p-2 bg-slate-100 rounded-lg text-slate-400 hover:text-red-500 transition-colors"><i className="fa-solid fa-right-from-bracket"></i></button>
                         </div>
                     </nav>
 
-                    <main className="max-w-7xl mx-auto p-6 md:p-10">
+                    <main className="flex-1 max-w-7xl mx-auto w-full p-6 md:p-10 animate-fade-in">
+                        {/* 商店視圖 */}
                         {view === 'shop' && (
-                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 animate-fade-in">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
                                 {products.filter(p => p.isActive).map(p => (
                                     <div key={p.id} onClick={() => { setSelectedProduct(p); setView('product_detail'); }} className="bg-white rounded-3xl p-2 border border-slate-100 shadow-sm hover:shadow-xl transition-all cursor-pointer group">
                                         <div className="aspect-[4/5] rounded-2xl overflow-hidden relative bg-slate-100">
-                                            <img src={p.image} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" alt="" />
+                                            <img src={p.image} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" alt={p.name} />
+                                            {getStockCount(p.name) === 0 && (
+                                                <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center">
+                                                    <span className="bg-white text-slate-900 px-4 py-1 rounded-full font-black text-sm">補貨中</span>
+                                                </div>
+                                            )}
                                         </div>
                                         <div className="p-4">
-                                            <h3 className="font-bold text-lg mb-1 truncate">{p.name}</h3>
+                                            <h3 className="font-bold text-lg mb-1 truncate text-slate-800">{p.name}</h3>
                                             <div className="flex justify-between items-center mt-2">
-                                                <span className="text-indigo-600 font-black">NT$ {p.price}</span>
-                                                <span className={`text-[10px] font-black px-2 py-1 rounded-md ${getStockCount(p.name) > 0 ? 'bg-green-50 text-green-600' : 'bg-red-50 text-red-600'}`}>在庫: {getStockCount(p.name)}</span>
+                                                <span className={`text-[10px] font-black px-2 py-1 rounded-md ${getStockCount(p.name) > 0 ? 'bg-green-50 text-green-600' : 'bg-red-50 text-red-600'}`}>
+                                                    在庫: {getStockCount(p.name)}
+                                                </span>
+                                                <span className="font-black text-indigo-600">NT$ {p.price}</span>
                                             </div>
                                         </div>
                                     </div>
@@ -297,40 +364,67 @@
                             </div>
                         )}
 
+                        {/* 商品詳情 */}
                         {view === 'product_detail' && selectedProduct && (
-                            <div className="animate-fade-in">
-                                <button onClick={() => setView('shop')} className="mb-6 flex items-center gap-2 text-slate-400 font-bold hover:text-indigo-600 transition"><i className="fa-solid fa-chevron-left"></i> 返回商店</button>
-                                <div className="bg-white rounded-[2.5rem] p-8 md:p-12 shadow-2xl flex flex-col md:flex-row gap-12 border border-white">
-                                    <img src={selectedProduct.image} className="w-full md:w-1/2 aspect-square object-cover rounded-[2rem] shadow-2xl" alt="" />
+                            <div>
+                                <button onClick={() => setView('shop')} className="mb-6 flex items-center gap-2 text-slate-400 font-bold hover:text-indigo-600 transition">
+                                    <i className="fa-solid fa-chevron-left"></i> 返回商店
+                                </button>
+                                <div className="bg-white rounded-[2.5rem] p-8 md:p-12 shadow-2xl flex flex-col md:row gap-12 border border-white max-w-5xl mx-auto flex-col md:flex-row">
+                                    <div className="w-full md:w-1/2 aspect-square rounded-[2rem] overflow-hidden shadow-2xl bg-slate-100 border-4 border-slate-50 flex-shrink-0">
+                                        <img src={selectedProduct.image} className="w-full h-full object-cover" alt={selectedProduct.name} />
+                                    </div>
                                     <div className="flex-1 flex flex-col justify-center">
-                                        <h1 className="text-5xl font-black mb-4 leading-tight">{selectedProduct.name}</h1>
-                                        <p className="text-slate-500 text-lg mb-8 leading-relaxed whitespace-pre-wrap">{selectedProduct.description || "尚無詳細介紹"}</p>
-                                        <div className="flex gap-4 mb-10">
-                                            <div className="bg-indigo-50 p-6 rounded-3xl flex-1 text-center border border-indigo-100 shadow-sm"><p className="text-[10px] font-black text-indigo-300 mb-1">售價</p><p className="text-3xl font-black text-indigo-600">NT$ {selectedProduct.price}</p></div>
-                                            <div className="bg-slate-50 p-6 rounded-3xl flex-1 text-center border border-slate-100 shadow-sm"><p className="text-[10px] font-black text-slate-300 mb-1">即時庫存</p><p className="text-3xl font-black">{getStockCount(selectedProduct.name)}</p></div>
+                                        <div className="mb-6">
+                                            <span className="bg-indigo-100 text-indigo-600 text-[10px] font-black px-3 py-1 rounded-full uppercase tracking-wider">數位授權版</span>
+                                            <h1 className="text-4xl md:text-5xl font-black mt-2 leading-tight text-slate-800">{selectedProduct.name}</h1>
                                         </div>
-                                        <button disabled={getStockCount(selectedProduct.name) === 0} onClick={() => setCartItem(selectedProduct)} className="w-full py-5 rounded-2xl bg-slate-900 text-white font-black text-xl hover:bg-indigo-600 transition-all disabled:opacity-20 shadow-xl shadow-indigo-100 active:scale-95">結帳取號</button>
+                                        <p className="text-slate-500 text-lg mb-8 leading-relaxed whitespace-pre-wrap">{selectedProduct.description || "專業數位通路授權，即買即用，24小時自動發號。"}</p>
+                                        <div className="flex gap-4 mb-10">
+                                            <div className="bg-indigo-50 p-6 rounded-3xl flex-1 text-center border border-indigo-100">
+                                                <p className="text-[10px] font-black text-indigo-300 mb-1 uppercase tracking-widest">售價</p>
+                                                <p className="text-3xl font-black text-indigo-600">NT$ {selectedProduct.price}</p>
+                                            </div>
+                                            <div className="bg-slate-50 p-6 rounded-3xl flex-1 text-center border border-slate-100">
+                                                <p className="text-[10px] font-black text-slate-300 mb-1 uppercase tracking-widest">目前現貨</p>
+                                                <p className="text-3xl font-black">{getStockCount(selectedProduct.name)}</p>
+                                            </div>
+                                        </div>
+                                        <button 
+                                            disabled={getStockCount(selectedProduct.name) === 0} 
+                                            onClick={() => setCartItem(selectedProduct)} 
+                                            className="w-full py-5 rounded-2xl bg-slate-900 text-white font-black text-xl hover:bg-indigo-600 transition-all shadow-xl active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed"
+                                        >
+                                            {getStockCount(selectedProduct.name) > 0 ? '立即結帳取號' : '商品已售罄'}
+                                        </button>
                                     </div>
                                 </div>
                             </div>
                         )}
 
+                        {/* 管理：商品管理 */}
                         {view === 'admin_products' && (
-                            <div className="space-y-8 animate-fade-in">
+                            <div className="space-y-8">
                                 <div className="flex justify-between items-center">
-                                    <h2 className="text-3xl font-black">商品展示管理</h2>
-                                    <button onClick={() => { setEditingProduct(null); setImagePreview(""); setIsProductModalOpen(true); }} className="bg-indigo-600 text-white px-6 py-2.5 rounded-xl font-bold flex items-center gap-2 shadow-lg hover:bg-indigo-700 transition"><i className="fa-solid fa-plus"></i> 新增商品</button>
+                                    <h2 className="text-3xl font-black text-slate-800">商品上架管理</h2>
+                                    <button onClick={() => { setEditingProduct(null); setImagePreview(""); setIsProductModalOpen(true); }} className="bg-indigo-600 text-white px-6 py-2.5 rounded-xl font-bold flex items-center gap-2 shadow-lg hover:bg-indigo-700 transition">
+                                        <i className="fa-solid fa-plus"></i> 新增商品
+                                    </button>
                                 </div>
                                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                                     {products.map(p => (
-                                        <div key={p.id} className="bg-white p-5 rounded-3xl border border-slate-100 flex gap-4 items-center shadow-sm">
-                                            <img src={p.image} className="w-20 h-20 rounded-2xl object-cover shadow-sm bg-slate-50" alt="" />
+                                        <div key={p.id} className="bg-white p-5 rounded-3xl border flex gap-4 items-center shadow-sm hover:shadow-md transition-shadow">
+                                            <img src={p.image} className="w-24 h-24 rounded-2xl object-cover shadow-sm bg-slate-50" />
                                             <div className="flex-1 min-w-0">
-                                                <h4 className="font-bold truncate">{p.name}</h4>
-                                                <p className="text-indigo-600 font-bold text-sm">NT$ {p.price} | 庫存: {getStockCount(p.name)}</p>
-                                                <div className="flex gap-2 mt-2">
-                                                    <button onClick={() => { setEditingProduct(p); setImagePreview(p.image); setIsProductModalOpen(true); }} className="p-2 bg-slate-100 rounded-lg hover:bg-indigo-600 hover:text-white transition"><i className="fa-solid fa-pen-to-square"></i></button>
-                                                    <button onClick={async () => { if(confirm("確定刪除？")) await window.FB.deleteDoc(window.FB.doc(window.FB.getFirestore(), 'artifacts', appId, 'public', 'data', 'products', p.id)); }} className="p-2 bg-red-50 text-red-500 rounded-lg hover:bg-red-500 hover:text-white transition"><i className="fa-solid fa-trash"></i></button>
+                                                <div className="flex justify-between items-start">
+                                                    <h4 className="font-bold truncate text-lg text-slate-700">{p.name}</h4>
+                                                    <span className={`w-3 h-3 rounded-full ${p.isActive ? 'bg-green-500' : 'bg-slate-300'}`}></span>
+                                                </div>
+                                                <p className="text-indigo-600 font-black text-sm">NT$ {p.price}</p>
+                                                <p className="text-slate-400 text-xs mt-1 font-bold">在庫: {getStockCount(p.name)}</p>
+                                                <div className="flex gap-2 mt-3">
+                                                    <button onClick={() => { setEditingProduct(p); setImagePreview(p.image); setIsProductModalOpen(true); }} className="px-3 py-1.5 bg-slate-100 rounded-lg text-slate-500 hover:bg-indigo-600 hover:text-white transition font-bold text-xs">編輯</button>
+                                                    <button onClick={async () => { if(confirm("確定刪除此商品？")) await db.collection('artifacts').doc(currentAppId).collection('public').doc('data').collection('products').doc(p.id).delete(); }} className="px-3 py-1.5 bg-red-50 text-red-400 rounded-lg hover:bg-red-500 hover:text-white transition font-bold text-xs">刪除</button>
                                                 </div>
                                             </div>
                                         </div>
@@ -339,84 +433,163 @@
                             </div>
                         )}
 
+                        {/* 管理：庫存管理 */}
                         {view === 'admin_keys' && (
-                            <div className="space-y-10 animate-fade-in">
-                                <div className="flex justify-between items-center">
-                                    <h2 className="text-3xl font-black">序號資產控管</h2>
-                                    <label className="cursor-pointer bg-indigo-600 text-white px-6 py-2.5 rounded-xl font-bold text-sm shadow-lg hover:bg-indigo-700 transition">批量匯入 Excel <i className="fa-solid fa-file-import ml-1"></i><input type="file" accept=".xlsx, .xls" className="hidden" onChange={handleExcelImport} /></label>
+                            <div className="space-y-10">
+                                <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                                    <h2 className="text-3xl font-black text-slate-800">序號資產控管</h2>
+                                    <label className="cursor-pointer bg-emerald-600 text-white px-6 py-2.5 rounded-xl font-bold text-sm shadow-lg hover:bg-emerald-700 transition flex items-center gap-2">
+                                        <i className="fa-solid fa-file-excel"></i> 批次匯入序號
+                                        <input type="file" accept=".xlsx, .xls" className="hidden" onChange={handleExcelImport} />
+                                    </label>
                                 </div>
-                                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                                     {stockOverview.map(s => (
-                                        <div key={s.name} className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm">
-                                            <h4 className="font-bold text-slate-800 truncate mb-3 border-b pb-2">{s.name}</h4>
-                                            <div className="flex justify-between items-center"><span className="text-[10px] font-black text-slate-400 uppercase">庫存</span><span className={`text-xl font-black ${s.available > 0 ? 'text-green-600' : 'text-red-500'}`}>{s.available}</span></div>
-                                            <div className="flex justify-between items-center"><span className="text-[10px] font-black text-slate-400 uppercase">已售</span><span className="text-sm font-bold text-slate-600">{s.sold}</span></div>
+                                        <div key={s.name} className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm">
+                                            <h4 className="font-bold text-slate-800 truncate mb-4 border-b pb-2 text-sm uppercase tracking-wide">{s.name}</h4>
+                                            <div className="space-y-2">
+                                                <div className="flex justify-between items-center">
+                                                    <span className="text-[10px] text-slate-400 font-black uppercase">在庫</span>
+                                                    <span className={`font-black text-2xl ${s.available > 0 ? 'text-green-600' : 'text-red-400'}`}>{s.available}</span>
+                                                </div>
+                                                <div className="flex justify-between items-center text-xs">
+                                                    <span className="text-[10px] text-slate-400 font-black uppercase">已售出</span>
+                                                    <span className="text-slate-600 font-bold">{s.sold}</span>
+                                                </div>
+                                            </div>
                                         </div>
                                     ))}
                                 </div>
-                                <div className="bg-white rounded-3xl border border-slate-100 overflow-hidden shadow-sm overflow-x-auto">
-                                    <table className="w-full text-left text-sm min-w-[600px]">
-                                        <thead className="bg-slate-50 border-b text-[10px] font-black text-slate-400 uppercase"><tr><th className="px-6 py-4">品名</th><th className="px-6 py-4">狀態</th><th className="px-6 py-4">單號</th><th className="px-6 py-4">銷售員</th><th className="px-6 py-4">時間</th></tr></thead>
-                                        <tbody className="divide-y">{inventory.sort((a,b) => (b.soldTime || b.importTime).localeCompare(a.soldTime || a.importTime)).map(k => (
-                                            <tr key={k.id} className="hover:bg-slate-50 transition-colors">
-                                                <td className="px-6 py-4 font-bold">{k.productName}</td>
-                                                <td className="px-6 py-4"><span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase ${k.status === 'available' ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-400'}`}>{k.status === 'available' ? '在庫' : '已售出'}</span></td>
-                                                <td className="px-6 py-4 font-mono text-xs">{k.invoiceNumber || "-"}</td>
-                                                <td className="px-6 py-4 font-black text-xs text-indigo-600">{k.soldBy || "-"}</td>
-                                                <td className="px-6 py-4 text-[10px] text-slate-400">{k.soldTime ? new Date(k.soldTime).toLocaleString() : '匯入: '+new Date(k.importTime).toLocaleDateString()}</td>
+                                <div className="bg-white rounded-[2rem] border overflow-hidden shadow-sm overflow-x-auto">
+                                    <table className="w-full text-left text-sm min-w-[800px]">
+                                        <thead className="bg-slate-50 border-b text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                                            <tr>
+                                                <th className="px-6 py-5">產品名稱</th>
+                                                <th className="px-6 py-5">序號代碼</th>
+                                                <th className="px-6 py-5">狀態</th>
+                                                <th className="px-6 py-5">銷售資訊</th>
+                                                <th className="px-6 py-5">匯入時間</th>
                                             </tr>
-                                        ))}</tbody>
+                                        </thead>
+                                        <tbody className="divide-y">
+                                            {inventory.sort((a,b) => b.importTime.localeCompare(a.importTime)).map(k => (
+                                                <tr key={k.id} className="hover:bg-slate-50 transition-colors">
+                                                    <td className="px-6 py-4 font-bold text-slate-700">{k.productName}</td>
+                                                    <td className="px-6 py-4 font-mono text-xs">{k.status === 'available' ? k.key : '****** (已隱藏)'}</td>
+                                                    <td className="px-6 py-4">
+                                                        <span className={`px-2 py-1 rounded text-[10px] font-black ${k.status === 'available' ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-400'}`}>
+                                                            {k.status === 'available' ? '在庫' : '已售'}
+                                                        </span>
+                                                    </td>
+                                                    <td className="px-6 py-4">
+                                                        {k.soldTime ? (
+                                                            <div className="text-[10px] space-y-1">
+                                                                <p className="font-bold text-indigo-600">單號: {k.invoiceNumber}</p>
+                                                                <p className="text-slate-400">買家: {k.customerEmail}</p>
+                                                            </div>
+                                                        ) : <span className="text-slate-300">-</span>}
+                                                    </td>
+                                                    <td className="px-6 py-4 text-[10px] text-slate-400 font-medium">
+                                                        {new Date(k.importTime).toLocaleString()}
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
                                     </table>
                                 </div>
                             </div>
                         )}
                     </main>
 
-                    {/* --- 結帳對話框 --- */}
+                    {/* 結帳 Modal */}
                     {cartItem && (
-                        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
-                            <div className="bg-white w-full max-w-lg rounded-[2.5rem] shadow-2xl p-8 space-y-6 animate-fade-in">
-                                <div className="flex justify-between items-start"><h3 className="text-2xl font-black">結帳確認</h3><button onClick={() => setCartItem(null)} className="text-slate-300 hover:text-slate-500"><i className="fa-solid fa-xmark text-2xl"></i></button></div>
-                                <div className="flex gap-4 p-4 bg-slate-50 rounded-2xl border border-slate-100">
-                                    <img src={cartItem.image} className="w-20 h-20 rounded-xl object-cover shadow-sm" alt="" />
-                                    <div><p className="font-bold text-lg">{cartItem.name}</p><p className="text-indigo-600 font-black text-2xl">NT$ {cartItem.price}</p></div>
+                        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-fade-in">
+                            <div className="bg-white w-full max-w-lg rounded-[2.5rem] shadow-2xl p-8 space-y-6 border border-white">
+                                <div className="flex justify-between items-start">
+                                    <h3 className="text-2xl font-black text-slate-800 tracking-tight">結帳確認</h3>
+                                    <button onClick={() => setCartItem(null)} className="text-slate-300 hover:text-slate-500 transition-colors"><i className="fa-solid fa-circle-xmark text-2xl"></i></button>
+                                </div>
+                                <div className="flex gap-5 p-5 bg-slate-50 rounded-[2rem] border border-slate-100 items-center">
+                                    <img src={cartItem.image} className="w-20 h-20 rounded-2xl object-cover shadow-sm" alt="" />
+                                    <div>
+                                        <p className="font-black text-xl text-slate-700">{cartItem.name}</p>
+                                        <p className="text-indigo-600 font-black text-2xl tracking-tighter">NT$ {cartItem.price}</p>
+                                    </div>
                                 </div>
                                 <div className="space-y-4">
-                                    <div><label className="text-xs font-black text-slate-400 uppercase ml-1">發票 / 單號</label><input type="text" value={invoiceInput} onChange={e => setInvoiceInput(e.target.value)} placeholder="現場單號" className="w-full bg-slate-50 border-2 border-slate-100 p-4 rounded-2xl outline-none focus:border-indigo-600 font-bold" /></div>
-                                    <div><label className="text-xs font-black text-slate-400 uppercase ml-1">接收 Email (列印則選填)</label><input type="email" value={emailInput} onChange={e => setEmailInput(e.target.value)} placeholder="example@gmail.com" className="w-full bg-slate-50 border-2 border-slate-100 p-4 rounded-2xl outline-none focus:border-indigo-600 font-bold" /></div>
+                                    <div className="space-y-1">
+                                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">發票/單據號碼 (選填)</label>
+                                        <input type="text" value={invoiceInput} onChange={e => setInvoiceInput(e.target.value)} placeholder="如為現場收款請輸入單號" className="w-full bg-slate-50 border-2 border-slate-100 p-4 rounded-2xl outline-none focus:border-indigo-600 font-bold" />
+                                    </div>
+                                    <div className="space-y-1">
+                                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">顧客 Email (領取序號)</label>
+                                        <input type="email" value={emailInput} onChange={e => setEmailInput(e.target.value)} placeholder="顧客電子郵件位址" className="w-full bg-slate-50 border-2 border-slate-100 p-4 rounded-2xl outline-none focus:border-indigo-600 font-bold" />
+                                    </div>
                                 </div>
-                                <div className="bg-indigo-50 p-4 rounded-xl text-center font-black text-[10px] text-indigo-700 uppercase tracking-widest border border-indigo-100">經手人員：{appUser.username}</div>
-                                <div className="grid grid-cols-2 gap-4">
-                                    <button onClick={() => handlePurchase('print')} className="flex flex-col items-center gap-2 p-5 bg-slate-900 text-white rounded-2xl hover:bg-slate-800 transition shadow-lg"><i className="fa-solid fa-print text-2xl"></i><span className="font-black text-sm">列印收據</span></button>
-                                    <button onClick={() => handlePurchase('mail')} className="flex flex-col items-center gap-2 p-5 border-2 border-indigo-600 text-indigo-600 rounded-2xl hover:bg-indigo-50 transition"><i className="fa-solid fa-envelope text-2xl"></i><span className="font-black text-sm">寄送郵件</span></button>
+                                <div className="grid grid-cols-2 gap-4 pt-2">
+                                    <button onClick={() => handlePurchase('print')} className="flex flex-col items-center gap-2 p-5 bg-slate-900 text-white rounded-[2rem] hover:bg-slate-800 transition shadow-lg active:scale-95">
+                                        <i className="fa-solid fa-print text-2xl"></i>
+                                        <span className="font-black text-xs">列印收據</span>
+                                    </button>
+                                    <button onClick={() => handlePurchase('mail')} className="flex flex-col items-center gap-2 p-5 border-2 border-indigo-600 text-indigo-600 rounded-[2rem] hover:bg-indigo-50 transition active:scale-95 font-black">
+                                        <i className="fa-solid fa-square-check text-2xl"></i>
+                                        <span className="text-xs">確認取號</span>
+                                    </button>
                                 </div>
                             </div>
                         </div>
                     )}
 
-                    {/* --- 商品編輯對話框 (Base64 上傳) --- */}
+                    {/* 商品編輯 Modal */}
                     {isProductModalOpen && (
-                        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
-                            <div className="bg-white w-full max-w-2xl rounded-[3rem] shadow-2xl p-10 animate-fade-in overflow-y-auto max-h-[90vh]">
-                                <h3 className="text-2xl font-black mb-6">{editingProduct ? '編輯展品資訊' : '新增商店展品'}</h3>
+                        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-fade-in">
+                            <div className="bg-white w-full max-w-2xl rounded-[3rem] shadow-2xl p-10 overflow-y-auto max-h-[90vh]">
+                                <h3 className="text-2xl font-black mb-6 text-slate-800">{editingProduct ? '編輯商品詳情' : '新增上架商品'}</h3>
                                 <form onSubmit={handleSaveProduct} className="space-y-6">
-                                    <div className="flex flex-col items-center gap-4 p-6 bg-slate-50 rounded-[2rem] border-2 border-dashed border-slate-200">
-                                        {imagePreview ? <img src={imagePreview} className="w-40 h-40 object-cover rounded-2xl shadow-lg border-2 border-white" /> : <i className="fa-solid fa-image text-4xl text-slate-300 py-4"></i>}
-                                        <button type="button" onClick={() => fileInputRef.current?.click()} className="bg-white border border-slate-200 px-6 py-2 rounded-xl text-sm font-bold shadow-sm hover:bg-slate-100 flex items-center gap-2"><i className="fa-solid fa-upload"></i> 本地圖片上傳</button>
-                                        <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleFileChange} />
+                                    <div className="flex flex-col items-center gap-4 p-8 bg-slate-50 rounded-[2.5rem] border-2 border-dashed border-slate-200">
+                                        {imagePreview ? <img src={imagePreview} className="w-48 h-48 object-cover rounded-3xl shadow-lg border-4 border-white" /> : <i className="fa-solid fa-images text-6xl text-slate-200"></i>}
+                                        <button type="button" onClick={() => fileInputRef.current?.click()} className="bg-white border-2 px-8 py-3 rounded-2xl font-black text-sm shadow-sm hover:bg-slate-100 flex items-center gap-2 transition-all">
+                                            <i className="fa-solid fa-cloud-arrow-up text-indigo-500"></i> 選擇封面圖片
+                                        </button>
+                                        <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={(e) => {
+                                            const file = e.target.files[0];
+                                            if (file) {
+                                                const reader = new FileReader();
+                                                reader.onloadend = () => setImagePreview(reader.result);
+                                                reader.readAsDataURL(file);
+                                            }
+                                        }} />
                                     </div>
-                                    <div className="grid grid-cols-2 gap-4">
-                                        <div><label className="text-xs font-black text-slate-400">遊戲品名</label><input name="name" list="inv-names" defaultValue={editingProduct?.name} required className="w-full bg-slate-50 border-2 border-slate-100 p-3 rounded-xl font-bold outline-none focus:border-indigo-600" /><datalist id="inv-names">{uniqueNamesFromInventory.map(n => <option key={n} value={n}>庫存: {getStockCount(n)}</option>)}</datalist></div>
-                                        <div><label className="text-xs font-black text-slate-400">定價</label><input name="price" type="number" defaultValue={editingProduct?.price} required className="w-full bg-slate-50 border-2 border-slate-100 p-3 rounded-xl font-bold outline-none focus:border-indigo-600" /></div>
+                                    <div className="grid grid-cols-2 gap-6">
+                                        <div className="space-y-1">
+                                            <label className="text-xs font-black text-slate-400 uppercase tracking-widest ml-1">遊戲/產品名稱</label>
+                                            <input name="name" defaultValue={editingProduct?.name} required className="w-full bg-slate-50 border-2 border-slate-100 p-4 rounded-2xl outline-none focus:border-indigo-600 font-bold" />
+                                        </div>
+                                        <div className="space-y-1">
+                                            <label className="text-xs font-black text-slate-400 uppercase tracking-widest ml-1">銷售單價 (NT$)</label>
+                                            <input name="price" type="number" defaultValue={editingProduct?.price} required className="w-full bg-slate-50 border-2 border-slate-100 p-4 rounded-2xl outline-none focus:border-indigo-600 font-bold" />
+                                        </div>
                                     </div>
-                                    <div><label className="text-xs font-black text-slate-400">外部圖片網址 (選填)</label><input name="image" defaultValue={editingProduct?.image} className="w-full bg-slate-50 border-2 border-slate-100 p-3 rounded-xl outline-none focus:border-indigo-600" /></div>
-                                    <div><label className="text-xs font-black text-slate-400">內容介紹</label><textarea name="description" rows="3" defaultValue={editingProduct?.description} className="w-full bg-slate-50 border-2 border-slate-100 p-3 rounded-xl outline-none focus:border-indigo-600" /></div>
-                                    <div className="flex items-center gap-3 bg-indigo-50 p-4 rounded-2xl"><input name="isActive" id="is_active_check" type="checkbox" defaultChecked={editingProduct?.isActive ?? true} className="w-6 h-6 accent-indigo-600"/><label htmlFor="is_active_check" className="font-bold text-indigo-700 cursor-pointer text-sm">立即上架至商店前台</label></div>
-                                    <div className="flex gap-4"><button type="button" onClick={() => setIsProductModalOpen(false)} className="flex-1 py-4 bg-slate-100 rounded-2xl font-bold text-slate-500">取消</button><button type="submit" className="flex-1 py-4 bg-indigo-600 text-white rounded-2xl font-black shadow-lg">儲存同步</button></div>
+                                    <div className="space-y-1">
+                                        <label className="text-xs font-black text-slate-400 uppercase tracking-widest ml-1">產品詳細介紹</label>
+                                        <textarea name="description" rows="4" defaultValue={editingProduct?.description} className="w-full bg-slate-50 border-2 border-slate-100 p-4 rounded-2xl outline-none focus:border-indigo-600 font-medium" placeholder="輸入商品描述..." />
+                                    </div>
+                                    <div className="flex items-center gap-3 bg-indigo-50 p-5 rounded-2xl border border-indigo-100">
+                                        <input name="isActive" id="is_active_check" type="checkbox" defaultChecked={editingProduct?.isActive ?? true} className="w-6 h-6 accent-indigo-600 rounded-lg" />
+                                        <label htmlFor="is_active_check" className="font-bold text-indigo-700 cursor-pointer text-sm">立即將商品上架至商店</label>
+                                    </div>
+                                    <div className="flex gap-4 pt-4">
+                                        <button type="button" onClick={() => setIsProductModalOpen(false)} className="flex-1 py-4 bg-slate-100 rounded-2xl font-bold text-slate-500">取消</button>
+                                        <button type="submit" className="flex-1 py-4 bg-indigo-600 text-white rounded-2xl font-black shadow-lg hover:bg-indigo-700 active:scale-95 transition">儲存變更</button>
+                                    </div>
                                 </form>
                             </div>
                         </div>
                     )}
+                    
+                    <footer className="p-10 text-center">
+                        <p className="text-slate-400 text-xs font-bold uppercase tracking-widest">KeyHub Pro &copy; 2024 · 雲端數據同步已開啟</p>
+                    </footer>
                 </div>
             );
         };
