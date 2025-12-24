@@ -28,7 +28,7 @@
     <script type="text/babel">
         const { useState, useEffect, useMemo } = React;
 
-        // --- 圖示元件 (使用 SVG 以免依賴外部圖示庫) ---
+        // --- 圖示元件 ---
         const Icons = {
             Database: () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>,
             FileText: () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>,
@@ -43,6 +43,8 @@
             ArrowRight: () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>,
             ArrowLeftRight: () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="17 11 21 7 17 3"></polyline><line x1="21" y1="7" x2="9" y2="7"></line><polyline points="7 21 3 17 7 13"></polyline><line x1="3" y1="17" x2="15" y2="17"></line></svg>,
             Type: () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="4 7 4 4 20 4 20 7"></polyline><line x1="9" y1="20" x2="15" y2="20"></line><line x1="12" y1="4" x2="12" y2="20"></line></svg>,
+            Map: () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"></polygon><line x1="8" y1="2" x2="8" y2="18"></line><line x1="16" y1="6" x2="16" y2="22"></line></svg>,
+            Filter: () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"></polygon></svg>
         };
 
         const Button = ({ children, onClick, disabled, variant = 'primary', className = '' }) => {
@@ -71,9 +73,11 @@
             const [step, setStep] = useState(1);
             const [isLoading, setIsLoading] = useState(false);
             
+            // 1. 檔案 State
             const [masterFile, setMasterFile] = useState(null);
-            const [compareFiles, setCompareFiles] = useState([]); 
+            const [sourceFile, setSourceFile] = useState(null); // 改為單一來源檔
             
+            // 2. 主檔解析資料
             const [masterWorkbook, setMasterWorkbook] = useState(null);
             const [masterSheetName, setMasterSheetName] = useState('');
             const [masterHeaders, setMasterHeaders] = useState([]);
@@ -81,11 +85,14 @@
             const [masterKeyCol, setMasterKeyCol] = useState('');
             const [masterValCol, setMasterValCol] = useState(''); 
 
-            const [compareConfigs, setCompareConfigs] = useState([]);
+            // 3. 來源檔解析與設定
+            const [sourceConfig, setSourceConfig] = useState(null);
+            const [warehouseOptions, setWarehouseOptions] = useState([]); // 分析出的所有倉庫代號
+            const [selectedWarehouses, setSelectedWarehouses] = useState([]); // 使用者勾選的倉庫代號
 
+            // 4. 結果
             const [mergedData, setMergedData] = useState([]);
             const [orphanData, setOrphanData] = useState([]); 
-            const [finalLabels, setFinalLabels] = useState({});
             const [finalHeaderOrder, setFinalHeaderOrder] = useState([]); 
 
             const readFile = (file) => {
@@ -110,13 +117,9 @@
                 setMasterSheetName(workbook.SheetNames[0]);
             };
 
-            const handleCompareUpload = (e) => {
-                const files = Array.from(e.target.files);
-                setCompareFiles(prev => [...prev, ...files]);
-            };
-
-            const removeCompareFile = (index) => {
-                setCompareFiles(prev => prev.filter((_, i) => i !== index));
+            const handleSourceUpload = (e) => {
+                const file = e.target.files[0];
+                if(file) setSourceFile(file);
             };
 
             useEffect(() => {
@@ -135,35 +138,39 @@
                 }
             }, [masterWorkbook, masterSheetName]);
 
+            // 初始化設定 (從 Step 1 -> Step 2)
             const initConfigs = async () => {
                 setIsLoading(true);
                 try {
-                    const newConfigs = [];
-                    for (let i = 0; i < compareFiles.length; i++) {
-                        const file = compareFiles[i];
-                        const { workbook } = await readFile(file);
-                        const firstSheet = workbook.SheetNames[0];
-                        const ws = workbook.Sheets[firstSheet];
-                        const rawData = XLSX.utils.sheet_to_json(ws);
-                        const headers = XLSX.utils.sheet_to_json(ws, { header: 1 })[0] || [];
-                        const defaultLabel = file.name.replace(/\.[^/.]+$/, "");
-                        const guessKey = headers.find(h => /id|sku|part|no|料號|編號/i.test(h)) || '';
-                        const guessVal = headers.find(h => /qty|stock|count|amount|數量|庫存/i.test(h)) || '';
-                        const guessLabelCol = headers.find(h => /warehouse|store|site|倉|店/i.test(h)) || '';
+                    // 讀取來源檔
+                    const { workbook } = await readFile(sourceFile);
+                    const firstSheet = workbook.SheetNames[0];
+                    const ws = workbook.Sheets[firstSheet];
+                    const rawData = XLSX.utils.sheet_to_json(ws);
+                    const headers = XLSX.utils.sheet_to_json(ws, { header: 1 })[0] || [];
+                    
+                    // 猜測欄位
+                    const guessKey = headers.find(h => /id|sku|part|no|料號|編號/i.test(h)) || '';
+                    const guessVal = headers.find(h => /qty|stock|count|amount|數量|庫存/i.test(h)) || '';
+                    const guessGroup = headers.find(h => /warehouse|store|site|loc|dep|倉|店|代號/i.test(h)) || '';
 
-                        newConfigs.push({
-                            id: i, 
-                            fileName: file.name,
-                            headers: headers,
-                            data: rawData,
-                            label: defaultLabel,
-                            keyCol: guessKey,
-                            valCol: guessVal,
-                            headerMode: 'manual', 
-                            headerCol: guessLabelCol
-                        });
+                    setSourceConfig({
+                        fileName: sourceFile.name,
+                        headers: headers,
+                        data: rawData,
+                        keyCol: guessKey,
+                        valCol: guessVal,
+                        groupCol: guessGroup
+                    });
+                    
+                    // 若有猜到分組欄位，嘗試先分析一次
+                    if (guessGroup) {
+                        analyzeWarehouses(rawData, guessGroup);
+                    } else {
+                        setWarehouseOptions([]);
+                        setSelectedWarehouses([]);
                     }
-                    setCompareConfigs(newConfigs);
+
                     setStep(2);
                 } catch (e) {
                     console.error(e);
@@ -173,17 +180,51 @@
                 }
             };
 
-            const updateConfig = (index, field, value) => {
-                const newConfigs = [...compareConfigs];
-                newConfigs[index][field] = value;
-                setCompareConfigs(newConfigs);
+            // 分析來源檔中的倉庫代號
+            const analyzeWarehouses = (data, groupCol) => {
+                if (!groupCol) return;
+                const uniqueWH = new Set();
+                data.forEach(row => {
+                    if (row[groupCol]) uniqueWH.add(String(row[groupCol]).trim());
+                });
+                const sortedWH = Array.from(uniqueWH).sort();
+                setWarehouseOptions(sortedWH);
+                setSelectedWarehouses([]); // 預設全不選
             };
 
+            // 當使用者修改來源檔的設定
+            const updateSourceConfig = (field, value) => {
+                const newConfig = { ...sourceConfig, [field]: value };
+                setSourceConfig(newConfig);
+                if (field === 'groupCol') {
+                    analyzeWarehouses(newConfig.data, value);
+                }
+            };
+
+            const toggleWarehouse = (wh) => {
+                if (selectedWarehouses.includes(wh)) {
+                    setSelectedWarehouses(prev => prev.filter(w => w !== wh));
+                } else {
+                    setSelectedWarehouses(prev => [...prev, wh]);
+                }
+            };
+            
+            const toggleAllWarehouses = () => {
+                if (selectedWarehouses.length === warehouseOptions.length) {
+                    setSelectedWarehouses([]);
+                } else {
+                    setSelectedWarehouses([...warehouseOptions]);
+                }
+            };
+
+            // 執行合併 (Step 2 -> Step 3)
             const handleProcess = async () => {
                 setIsLoading(true);
                 setTimeout(() => {
                     try {
                         const resultRows = JSON.parse(JSON.stringify(masterData));
+                        
+                        // 建立 Master Map 以便快速查找
                         const masterMap = new Map();
                         resultRows.forEach(row => {
                             const key = row[masterKeyCol] !== undefined ? String(row[masterKeyCol]).trim() : "UNDEFINED";
@@ -191,34 +232,32 @@
                         });
 
                         const orphans = [];
-                        const resolvedLabels = {}; 
+                        const { keyCol, valCol, groupCol, data } = sourceConfig;
 
-                        compareConfigs.forEach(config => {
-                            const { keyCol, valCol, data, fileName, headerMode, headerCol, label } = config;
-                            let targetColName = fileName;
-                            if (headerMode === 'manual') {
-                                targetColName = label || fileName;
-                            } else if (headerMode === 'from_col' && headerCol) {
-                                const sampleRow = data.find(r => r[headerCol] && String(r[headerCol]).trim() !== '');
-                                targetColName = sampleRow ? String(sampleRow[headerCol]).trim() : `${fileName}_(無資料)`;
-                            }
-                            resolvedLabels[config.id] = targetColName;
-
-                            data.forEach(row => {
+                        // 遍歷所有選擇的倉庫代號，作為新的欄位名稱
+                        selectedWarehouses.forEach(whCode => {
+                            // 篩選出屬於該倉庫的資料
+                            const warehouseRows = data.filter(row => String(row[groupCol]).trim() === whCode);
+                            
+                            warehouseRows.forEach(row => {
                                 const rowKey = row[keyCol] !== undefined ? String(row[keyCol]).trim() : null;
                                 const rowVal = row[valCol];
+                                
                                 if (rowKey) {
                                     if (masterMap.has(rowKey)) {
                                         const masterRow = masterMap.get(rowKey);
-                                        masterRow[targetColName] = rowVal; 
+                                        // 直接使用倉庫代號作為欄位名稱
+                                        masterRow[whCode] = rowVal; 
                                     } else {
-                                        orphans.push({ sourceFileId: config.id, data: row });
+                                        // 記錄 Orphan，並標記來源倉庫
+                                        orphans.push({ warehouse: whCode, data: row });
                                     }
                                 }
                             });
                         });
 
-                        const newComparisonCols = compareConfigs.map(c => resolvedLabels[c.id]);
+                        // 決定最後欄位順序
+                        const newComparisonCols = selectedWarehouses;
                         let newHeaderOrder = [];
                         if (masterValCol && masterHeaders.includes(masterValCol)) {
                             const insertIndex = masterHeaders.indexOf(masterValCol) + 1;
@@ -227,20 +266,13 @@
                             newHeaderOrder = [...masterHeaders, ...newComparisonCols];
                         }
 
-                        const reorderedData = resultRows.map(row => {
-                            const newRow = {};
-                            newHeaderOrder.forEach(h => { newRow[h] = row[h]; });
-                            return newRow;
-                        });
-
-                        setFinalLabels(resolvedLabels);
                         setFinalHeaderOrder(newHeaderOrder);
-                        setMergedData(reorderedData);
+                        setMergedData(resultRows);
                         setOrphanData(orphans);
                         setStep(3);
                     } catch (error) {
                         console.error(error);
-                        alert("處理錯誤");
+                        alert("處理錯誤: " + error.message);
                     } finally {
                         setIsLoading(false);
                     }
@@ -251,17 +283,17 @@
 
             const downloadReport = () => {
                 const wb = XLSX.utils.book_new();
+                
+                // 1. 總表
                 const wsMerged = XLSX.utils.json_to_sheet(mergedData, { header: finalHeaderOrder });
                 XLSX.utils.book_append_sheet(wb, wsMerged, "庫存合併總表");
 
-                let hasOrphans = false;
-                compareConfigs.forEach(config => {
-                    const label = finalLabels[config.id];
-                    const fileOrphans = orphanData.filter(o => o.sourceFileId === config.id).map(o => o.data);
+                // 2. 額外資料 (Orphans) - 依倉庫分頁
+                selectedWarehouses.forEach(whCode => {
+                    const fileOrphans = orphanData.filter(o => o.warehouse === whCode).map(o => o.data);
                     if (fileOrphans.length > 0) {
-                        hasOrphans = true;
-                        const sheetName = sanitizeSheetName(`額外_${label}`);
-                        const ws = XLSX.utils.json_to_sheet(fileOrphans, { header: config.headers });
+                        const sheetName = sanitizeSheetName(`額外_${whCode}`);
+                        const ws = XLSX.utils.json_to_sheet(fileOrphans, { header: sourceConfig.headers });
                         XLSX.utils.book_append_sheet(wb, ws, sheetName);
                     }
                 });
@@ -273,9 +305,9 @@
                     <div className="max-w-6xl mx-auto">
                         <header className="mb-8 border-b pb-4">
                             <h1 className="text-3xl font-bold text-gray-900 flex items-center gap-3">
-                                <Icons.Database /> Excel 多檔庫存合併工具 (免安裝版)
+                                <Icons.Database /> Excel 多檔庫存合併工具 (單檔多倉版)
                             </h1>
-                            <p className="text-gray-500 mt-2">請上傳您的 Excel 檔案進行合併比對。</p>
+                            <p className="text-gray-500 mt-2">請上傳含有「倉庫代號」欄位的單一來源檔案進行比對。</p>
                         </header>
 
                         {/* 進度條 */}
@@ -284,7 +316,7 @@
                                 <React.Fragment key={s}>
                                     <div className={`flex items-center gap-2 ${step >= s ? 'text-blue-600 font-bold' : 'text-gray-400'}`}>
                                         <span className={`w-8 h-8 rounded-full flex items-center justify-center border-2 ${step >= s ? 'border-blue-600 bg-blue-50' : 'border-gray-300'}`}>{s}</span>
-                                        <span className="hidden sm:inline">{s === 1 ? "上傳檔案" : s === 2 ? "欄位設定" : "下載結果"}</span>
+                                        <span className="hidden sm:inline">{s === 1 ? "上傳檔案" : s === 2 ? "欄位與倉庫設定" : "下載結果"}</span>
                                     </div>
                                     {s < 3 && <div className="flex-1 h-px bg-gray-300 mx-4"></div>}
                                 </React.Fragment>
@@ -319,39 +351,41 @@
                                     </div>
                                 </Card>
                                 <Card className="md:col-span-7 p-6 border-2 border-orange-100 h-full flex flex-col">
-                                    <h3 className="text-lg font-bold text-orange-800 mb-2 flex items-center gap-2"><Icons.Database /> 2. 來源檔案 (多選)</h3>
-                                    <div className="flex-1 flex flex-col">
-                                        <div className="flex-1 bg-gray-50 rounded-lg border border-gray-200 p-2 overflow-y-auto min-h-[150px] max-h-[300px]">
-                                            {compareFiles.length === 0 ? (
-                                                <div className="h-full flex flex-col items-center justify-center text-gray-400"><div className="w-8 h-8 mb-2 opacity-50"><Icons.Plus /></div><span>尚未加入任何檔案</span></div>
-                                            ) : (
-                                                <ul className="space-y-2">
-                                                    {compareFiles.map((file, idx) => (
-                                                        <li key={idx} className="flex items-center justify-between bg-white p-3 rounded border border-gray-100 text-sm shadow-sm">
-                                                            <div className="flex items-center gap-2 truncate"><span className="bg-orange-100 text-orange-800 text-xs px-2 py-0.5 rounded-full font-bold">{idx + 1}</span><span className="truncate font-medium text-gray-700">{file.name}</span></div>
-                                                            <button onClick={() => removeCompareFile(idx)} className="text-gray-400 hover:text-red-500 ml-2 p-1"><Icons.Trash2 /></button>
-                                                        </li>
-                                                    ))}
-                                                </ul>
-                                            )}
-                                        </div>
-                                        <div className="mt-4">
-                                            <input type="file" id="compareUpload" multiple accept=".xlsx,.xls,.csv" onChange={handleCompareUpload} />
-                                            <label htmlFor="compareUpload" className="cursor-pointer inline-flex items-center justify-center gap-2 px-4 py-3 bg-orange-100 text-orange-700 rounded-lg hover:bg-orange-200 transition-colors w-full font-medium border border-orange-200"><div className="w-5 h-5"><Icons.Plus /></div> 新增來源檔案</label>
-                                        </div>
+                                    <h3 className="text-lg font-bold text-orange-800 mb-2 flex items-center gap-2"><Icons.Database /> 2. 來源檔案 (含多倉資料)</h3>
+                                    <div className="bg-orange-50 border border-orange-200 border-dashed rounded-lg p-6 text-center flex-1 flex flex-col justify-center items-center">
+                                        {!sourceFile ? (
+                                            <>
+                                                <input type="file" id="sourceUpload" accept=".xlsx,.xls,.csv" onChange={handleSourceUpload} />
+                                                <label htmlFor="sourceUpload" className="cursor-pointer flex flex-col items-center">
+                                                    <div className="w-10 h-10 text-orange-400 mb-2"><Icons.Upload /></div>
+                                                    <span className="text-orange-700 font-medium">上傳來源檔 (含倉庫代號欄位)</span>
+                                                </label>
+                                            </>
+                                        ) : (
+                                            <div className="w-full">
+                                                <div className="flex items-center justify-between bg-white p-3 rounded shadow-sm border border-orange-100">
+                                                    <div className="flex items-center gap-2 truncate">
+                                                        <div className="w-5 h-5 text-green-600"><Icons.FileSpreadsheet /></div>
+                                                        <span className="font-medium text-gray-700 truncate">{sourceFile.name}</span>
+                                                    </div>
+                                                    <button onClick={() => setSourceFile(null)} className="text-red-400 hover:text-red-600"><Icons.Trash2 /></button>
+                                                </div>
+                                                <p className="text-xs text-gray-500 mt-2 text-left">請確保此檔案中包含一個區分「倉庫代號」或「店別」的欄位。</p>
+                                            </div>
+                                        )}
                                     </div>
                                 </Card>
                             </div>
                         )}
 
                         {/* Step 2: Config */}
-                        {step === 2 && (
+                        {step === 2 && sourceConfig && (
                             <div className="animate-fade-in space-y-8">
                                 <Card className="p-6 border-l-4 border-l-blue-500">
                                     <div className="flex flex-col md:flex-row gap-6">
                                         <div className="w-full md:w-1/3">
-                                            <h3 className="text-lg font-bold text-gray-800 mb-2">主檔設定</h3>
-                                            <p className="text-sm text-gray-500">設定 Key 值與主要數值欄位，<span className="text-blue-600 font-bold">合併欄位將插入在數值欄位之後。</span></p>
+                                            <h3 className="text-lg font-bold text-gray-800 mb-2">1. 主檔設定</h3>
+                                            <p className="text-sm text-gray-500">設定 Key 值與主要數值欄位，<span className="text-blue-600 font-bold">合併的倉庫欄位將插入在數值欄位之後。</span></p>
                                         </div>
                                         <div className="w-full md:w-2/3 grid md:grid-cols-2 gap-4">
                                             <div>
@@ -368,52 +402,59 @@
                                         </div>
                                     </div>
                                 </Card>
-                                <div>
-                                    <h3 className="text-xl font-bold text-gray-800 mb-4 flex items-center gap-2"><Icons.Settings /> 來源檔詳細設定</h3>
-                                    <div className="space-y-6">
-                                        {compareConfigs.map((config, index) => (
-                                            <Card key={index} className="p-4 border border-gray-200 shadow-sm hover:shadow-md transition-shadow">
-                                                <div className="flex items-center gap-2 mb-4 border-b pb-2"><span className="bg-orange-100 text-orange-800 text-xs px-2 py-0.5 rounded-full font-bold">File {index + 1}</span><div className="w-4 h-4 text-gray-500"><Icons.FileSpreadsheet /></div><span className="font-medium text-gray-800">{config.fileName}</span></div>
-                                                <div className="grid md:grid-cols-3 gap-6">
-                                                    <div className="space-y-3">
-                                                        <div>
-                                                            <label className="block text-xs font-medium text-gray-600 mb-1">1. 對應料號 (Key) <span className="text-red-500">*</span></label>
-                                                            <select className="w-full border border-gray-300 rounded px-2 py-1.5 bg-gray-50 text-sm" value={config.keyCol} onChange={(e) => updateConfig(index, 'keyCol', e.target.value)}><option value="">請選擇...</option>{config.headers.map(h => <option key={h} value={h}>{h}</option>)}</select>
-                                                        </div>
-                                                        <div>
-                                                            <label className="block text-xs font-medium text-gray-600 mb-1">2. 抓取數值 (Value) <span className="text-red-500">*</span></label>
-                                                            <select className="w-full border-2 border-green-100 rounded px-2 py-1.5 bg-green-50 text-sm" value={config.valCol} onChange={(e) => updateConfig(index, 'valCol', e.target.value)}><option value="">請選擇...</option>{config.headers.map(h => <option key={h} value={h}>{h}</option>)}</select>
-                                                        </div>
-                                                    </div>
-                                                    <div className="md:col-span-2 bg-blue-50/50 p-3 rounded-lg border border-blue-100">
-                                                        <label className="block text-xs font-bold text-blue-700 mb-2 flex items-center gap-1"><div className="w-3 h-3"><Icons.Type /></div> 3. 表頭名稱來源 (Header)</label>
-                                                        <div className="grid grid-cols-2 gap-4">
-                                                            <div>
-                                                                <div className="flex items-center gap-4 mb-2">
-                                                                    <label className="flex items-center gap-1 cursor-pointer"><input type="radio" name={`headerMode-${index}`} checked={config.headerMode === 'manual'} onChange={() => updateConfig(index, 'headerMode', 'manual')} className="text-blue-600" /><span className="text-sm">手動輸入</span></label>
-                                                                    <label className="flex items-center gap-1 cursor-pointer"><input type="radio" name={`headerMode-${index}`} checked={config.headerMode === 'from_col'} onChange={() => updateConfig(index, 'headerMode', 'from_col')} className="text-blue-600" /><span className="text-sm font-bold text-blue-800">取自欄位</span></label>
-                                                                </div>
-                                                            </div>
-                                                            <div>
-                                                                {config.headerMode === 'manual' ? (
-                                                                    <input type="text" className="w-full border border-gray-300 rounded px-2 py-1.5 focus:ring-2 focus:ring-blue-200 outline-none text-sm" placeholder="輸入表頭名稱" value={config.label} onChange={(e) => updateConfig(index, 'label', e.target.value)} />
-                                                                ) : (
-                                                                    <div className="flex flex-col">
-                                                                        <select className="w-full border border-blue-300 rounded px-2 py-1.5 bg-white text-sm" value={config.headerCol} onChange={(e) => updateConfig(index, 'headerCol', e.target.value)}><option value="">請選擇欄位...</option>{config.headers.map(h => <option key={h} value={h}>{h}</option>)}</select>
-                                                                        <span className="text-[10px] text-gray-500 mt-1">讀取此欄位第一列資料</span>
-                                                                    </div>
-                                                                )}
-                                                            </div>
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                            </Card>
-                                        ))}
+                                <Card className="p-6 border-l-4 border-l-orange-500">
+                                    <div className="flex flex-col md:flex-row gap-6">
+                                        <div className="w-full md:w-1/3">
+                                            <h3 className="text-lg font-bold text-gray-800 mb-2">2. 來源檔欄位設定</h3>
+                                            <p className="text-sm text-gray-500">請指定來源檔中的對應欄位，尤其是<span className="text-orange-600 font-bold">分組欄位 (倉庫代號)</span>。</p>
+                                        </div>
+                                        <div className="w-full md:w-2/3 grid md:grid-cols-3 gap-4">
+                                            <div>
+                                                <label className="block text-sm font-medium text-gray-700 mb-1">來源 Key (料號) <span className="text-red-500">*</span></label>
+                                                <select className="w-full border border-gray-300 rounded p-2 bg-gray-50" value={sourceConfig.keyCol} onChange={(e) => updateSourceConfig('keyCol', e.target.value)}><option value="">請選擇...</option>{sourceConfig.headers.map(h => <option key={h} value={h}>{h}</option>)}</select>
+                                            </div>
+                                            <div>
+                                                <label className="block text-sm font-medium text-gray-700 mb-1">來源 Value (庫存) <span className="text-red-500">*</span></label>
+                                                <select className="w-full border-2 border-green-100 rounded p-2 bg-green-50" value={sourceConfig.valCol} onChange={(e) => updateSourceConfig('valCol', e.target.value)}><option value="">請選擇...</option>{sourceConfig.headers.map(h => <option key={h} value={h}>{h}</option>)}</select>
+                                            </div>
+                                            <div>
+                                                <label className="block text-sm font-medium text-gray-700 mb-1">分組欄位 (倉庫代號) <span className="text-red-500">*</span></label>
+                                                <select className="w-full border-2 border-orange-200 rounded p-2 bg-orange-50 font-bold text-orange-800" value={sourceConfig.groupCol} onChange={(e) => updateSourceConfig('groupCol', e.target.value)}><option value="">請選擇...</option>{sourceConfig.headers.map(h => <option key={h} value={h}>{h}</option>)}</select>
+                                            </div>
+                                        </div>
                                     </div>
-                                </div>
+                                    
+                                    {/* 倉庫選擇區 */}
+                                    {sourceConfig.groupCol && (
+                                        <div className="mt-8 pt-6 border-t border-gray-100">
+                                            <div className="flex items-center justify-between mb-4">
+                                                <h4 className="text-base font-bold text-gray-700 flex items-center gap-2"><Icons.Map /> 請選擇要匯出的倉庫 ({selectedWarehouses.length}/{warehouseOptions.length})</h4>
+                                                <button onClick={toggleAllWarehouses} className="text-sm text-blue-600 hover:text-blue-800 underline">
+                                                    {selectedWarehouses.length === warehouseOptions.length ? "取消全選" : "全選"}
+                                                </button>
+                                            </div>
+                                            
+                                            {warehouseOptions.length > 0 ? (
+                                                <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-3 max-h-[300px] overflow-y-auto p-2 bg-gray-50 rounded-lg border border-gray-200">
+                                                    {warehouseOptions.map(wh => (
+                                                        <label key={wh} className={`flex items-center gap-2 p-2 rounded cursor-pointer border transition-all ${selectedWarehouses.includes(wh) ? 'bg-blue-50 border-blue-300 text-blue-800' : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-100'}`}>
+                                                            <input type="checkbox" checked={selectedWarehouses.includes(wh)} onChange={() => toggleWarehouse(wh)} className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500" />
+                                                            <span className="text-sm truncate font-medium" title={wh}>{wh}</span>
+                                                        </label>
+                                                    ))}
+                                                </div>
+                                            ) : (
+                                                <div className="text-center py-8 text-gray-400 bg-gray-50 rounded-lg border border-gray-200 border-dashed">
+                                                    在此欄位中找不到任何資料，請確認是否選對欄位。
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
+                                </Card>
+
                                 <div className="flex justify-between pt-4">
                                     <Button variant="secondary" onClick={() => setStep(1)}>上一步</Button>
-                                    <Button onClick={handleProcess} disabled={!masterKeyCol || compareConfigs.some(c => !c.keyCol || !c.valCol) || isLoading} className="w-48">{isLoading ? <div className="w-4 h-4 animate-spin"><Icons.RefreshCw /></div> : "開始合併"}</Button>
+                                    <Button onClick={handleProcess} disabled={!masterKeyCol || !sourceConfig.keyCol || !sourceConfig.valCol || !sourceConfig.groupCol || selectedWarehouses.length === 0 || isLoading} className="w-48">{isLoading ? <div className="w-4 h-4 animate-spin"><Icons.RefreshCw /></div> : "開始合併"}</Button>
                                 </div>
                             </div>
                         )}
@@ -423,7 +464,7 @@
                             <div className="animate-fade-in text-center py-12">
                                 <div className="inline-flex items-center justify-center w-20 h-20 bg-green-100 text-green-600 rounded-full mb-6 shadow-sm"><div className="w-10 h-10"><Icons.Check /></div></div>
                                 <h2 className="text-2xl font-bold text-gray-900 mb-2">合併完成！</h2>
-                                <p className="text-gray-600 mb-8 max-w-lg mx-auto">主檔資料已整合。發現 <strong>{orphanData.length}</strong> 筆額外料號，已依據檔案來源自動分頁。</p>
+                                <p className="text-gray-600 mb-8 max-w-lg mx-auto">已將 <strong>{selectedWarehouses.length}</strong> 個倉庫的庫存資料合併至主表。<br/>發現 <strong>{orphanData.length}</strong> 筆額外料號。</p>
                                 <div className="flex justify-center gap-4 mb-12">
                                     <Button variant="secondary" onClick={() => window.location.reload()}>重新開始</Button>
                                     <Button onClick={downloadReport} className="pl-8 pr-8 py-3 text-lg shadow-lg bg-green-600 hover:bg-green-700"><div className="w-5 h-5"><Icons.Download /></div> 下載報表 (.xlsx)</Button>
@@ -433,10 +474,10 @@
                                     <div className="overflow-x-auto">
                                         <table className="w-full text-sm">
                                             <thead className="bg-gray-50 text-gray-600 font-semibold border-b">
-                                                <tr>{finalHeaderOrder.slice(0, 10).map((h, idx) => (<th key={idx} className={`p-3 text-left border-r min-w-[100px] ${h === masterKeyCol ? 'bg-gray-100 font-bold' : ''} ${h === masterValCol ? 'bg-green-50 text-green-800 border-green-200' : ''} ${Object.values(finalLabels).includes(h) ? 'bg-blue-50 text-blue-800' : ''}`}>{h}</th>))}</tr>
+                                                <tr>{finalHeaderOrder.slice(0, 10).map((h, idx) => (<th key={idx} className={`p-3 text-left border-r min-w-[100px] ${h === masterKeyCol ? 'bg-gray-100 font-bold' : ''} ${h === masterValCol ? 'bg-green-50 text-green-800 border-green-200' : ''} ${selectedWarehouses.includes(h) ? 'bg-blue-50 text-blue-800' : ''}`}>{h}</th>))}</tr>
                                             </thead>
                                             <tbody className="divide-y divide-gray-100">
-                                                {mergedData.slice(0, 5).map((row, i) => (<tr key={i} className="hover:bg-gray-50 transition-colors">{finalHeaderOrder.slice(0, 10).map((h, idx) => (<td key={idx} className={`p-3 border-r ${h === masterValCol ? 'bg-green-50/30 font-medium' : ''} ${Object.values(finalLabels).includes(h) ? 'bg-blue-50/30 font-bold' : ''}`}>{row[h] !== undefined ? row[h] : '-'}</td>))}</tr>))}
+                                                {mergedData.slice(0, 5).map((row, i) => (<tr key={i} className="hover:bg-gray-50 transition-colors">{finalHeaderOrder.slice(0, 10).map((h, idx) => (<td key={idx} className={`p-3 border-r ${h === masterValCol ? 'bg-green-50/30 font-medium' : ''} ${selectedWarehouses.includes(h) ? 'bg-blue-50/30 font-bold' : ''}`}>{row[h] !== undefined ? row[h] : '-'}</td>))}</tr>))}
                                             </tbody>
                                         </table>
                                     </div>
@@ -446,7 +487,7 @@
 
                         {step === 1 && (
                              <div className="mt-8 flex justify-end">
-                                <Button onClick={initConfigs} disabled={!masterFile || compareFiles.length === 0 || isLoading} className="pl-8 pr-8">{isLoading ? <div className="w-4 h-4 animate-spin"><Icons.RefreshCw /></div> : "下一步：設定"} {!isLoading && <div className="w-4 h-4"><Icons.ArrowRight /></div>}</Button>
+                                <Button onClick={initConfigs} disabled={!masterFile || !sourceFile || isLoading} className="pl-8 pr-8">{isLoading ? <div className="w-4 h-4 animate-spin"><Icons.RefreshCw /></div> : "下一步：設定"} {!isLoading && <div className="w-4 h-4"><Icons.ArrowRight /></div>}</Button>
                              </div>
                         )}
                     </div>
