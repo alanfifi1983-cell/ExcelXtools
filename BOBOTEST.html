@@ -1,0 +1,593 @@
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { initializeApp } from 'firebase/app';
+import { 
+  getFirestore, collection, doc, setDoc, getDoc, getDocs, 
+  updateDoc, onSnapshot, query, where, addDoc, deleteDoc
+} from 'firebase/firestore';
+import { 
+  getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken 
+} from 'firebase/auth';
+import { 
+  ShoppingBag, Settings, Upload, Download, Mail, 
+  CheckCircle, Clock, Tag, Search, Plus, Trash2, 
+  FileSpreadsheet, ArrowRight, Package, User, Database, 
+  Loader2, Eye, EyeOff, Edit3, ChevronLeft, Info, Key, AlertTriangle, ListFilter, Printer, Server, BarChart3, Users, LogOut, ShieldCheck, Image as ImageIcon
+} from 'lucide-react';
+
+// --- Firebase 配置 ---
+const firebaseConfig = JSON.parse(__firebase_config);
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'game-key-store';
+
+const App = () => {
+  const [view, setView] = useState('login'); 
+  const [user, setUser] = useState(null); 
+  const [appUser, setAppUser] = useState(null); 
+  const [loading, setLoading] = useState(true);
+  const [libReady, setLibReady] = useState(false);
+  const [products, setProducts] = useState([]);
+  const [inventory, setInventory] = useState([]);
+  const [systemUsers, setSystemUsers] = useState([]);
+  const [mailSettings, setMailSettings] = useState({ serviceId: '', templateId: '', publicKey: '', active: false });
+  
+  const [selectedProduct, setSelectedProduct] = useState(null);
+  const [editingProduct, setEditingProduct] = useState(null);
+  const [isProductModalOpen, setIsProductModalOpen] = useState(false);
+  const [productToDelete, setProductToDelete] = useState(null);
+  
+  const [cartItem, setCartItem] = useState(null);
+  const [emailInput, setEmailInput] = useState("");
+  const [invoiceInput, setInvoiceInput] = useState("");
+  
+  const [loginForm, setLoginForm] = useState({ username: '', password: '' });
+
+  // 本地圖片預覽狀態
+  const [imagePreview, setImagePreview] = useState("");
+  const fileInputRef = useRef(null);
+
+  // --- 1. 初始化與動態加載 XLSX ---
+  useEffect(() => {
+    const script = document.createElement('script');
+    script.src = "https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js";
+    script.async = true;
+    script.onload = () => setLibReady(true);
+    document.head.appendChild(script);
+
+    const initAuth = async () => {
+      try {
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await signInWithCustomToken(auth, __initial_auth_token);
+        } else {
+          await signInAnonymously(auth);
+        }
+      } catch (err) {
+        console.error("Auth error:", err);
+      }
+    };
+    initAuth();
+    const unsubscribe = onAuthStateChanged(auth, (currUser) => {
+      setUser(currUser);
+      setLoading(false);
+    });
+    return () => {
+      unsubscribe();
+      if (document.head.contains(script)) document.head.removeChild(script);
+    };
+  }, []);
+
+  // --- 2. 實時資料監聽 (Firestore) ---
+  useEffect(() => {
+    if (!user) return;
+    
+    const unsubProducts = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'products'), (snapshot) => {
+      setProducts(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    });
+
+    const unsubKeys = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'keys'), (snapshot) => {
+      setInventory(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    });
+
+    const unsubSettings = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'mail'), (docSnap) => {
+      if (docSnap.exists()) setMailSettings(docSnap.data());
+    });
+
+    const unsubUsers = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'users'), (snapshot) => {
+      const uList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      if (uList.length === 0) {
+        const adminRef = doc(collection(db, 'artifacts', appId, 'public', 'data', 'users'));
+        setDoc(adminRef, { username: 'admin', password: '123', role: 'admin' });
+      }
+      setSystemUsers(uList);
+    });
+
+    return () => { unsubProducts(); unsubKeys(); unsubSettings(); unsubUsers(); };
+  }, [user]);
+
+  // --- 3. 帳號管理與登入邏輯 ---
+  const handleLogin = (e) => {
+    e.preventDefault();
+    const foundUser = systemUsers.find(u => u.username === loginForm.username && u.password === loginForm.password);
+    if (foundUser) {
+      setAppUser(foundUser);
+      setView('shop');
+    } else {
+      alert("帳號或密碼錯誤！");
+    }
+  };
+
+  const handleLogout = () => {
+    setAppUser(null);
+    setView('login');
+  };
+
+  const handleSaveUser = async (e) => {
+    e.preventDefault();
+    const formData = new FormData(e.target);
+    const uData = {
+      username: formData.get('username').trim(),
+      password: formData.get('password'),
+      role: formData.get('role')
+    };
+    await setDoc(doc(collection(db, 'artifacts', appId, 'public', 'data', 'users')), uData);
+    alert("員工帳號已建立");
+    e.target.reset();
+  };
+
+  // --- 4. 庫存與分析 ---
+  const stockOverview = useMemo(() => {
+    const summary = {};
+    inventory.forEach(item => {
+      const name = item.productName || "未分類";
+      if (!summary[name]) summary[name] = { total: 0, available: 0, sold: 0 };
+      summary[name].total++;
+      if (item.status === 'available') summary[name].available++;
+      if (item.status === 'sold') summary[name].sold++;
+    });
+    return Object.entries(summary).map(([name, stats]) => ({ name, ...stats }));
+  }, [inventory]);
+
+  const uniqueNamesFromInventory = useMemo(() => stockOverview.map(s => s.name).sort(), [stockOverview]);
+
+  const getStockCount = (name) => {
+    const found = stockOverview.find(s => s.name === name);
+    return found ? found.available : 0;
+  };
+
+  // --- 5. 列印功能 ---
+  const printReceipt = (order) => {
+    const printWindow = window.open('', '_blank', 'width=300,height=600');
+    const receiptHtml = `
+      <html><head><style>body { font-family: sans-serif; width: 80mm; padding: 10mm; font-size: 14px; } .center { text-align: center; } .bold { font-weight: bold; } .line { border-bottom: 1px dashed #000; margin: 10px 0; } .key-box { border: 2px solid #000; padding: 10px; margin: 10px 0; font-size: 18px; text-align: center; word-break: break-all; }</style></head>
+      <body>
+        <div class="center bold">KEYHUB 數位存根</div><div class="line"></div>
+        <div>日期: ${new Date(order.soldTime).toLocaleString()}</div>
+        <div>單號: ${order.invoiceNumber}</div>
+        <div>經手人: ${order.soldBy}</div>
+        <div class="line"></div>
+        <div class="bold">品名: ${order.productName}</div>
+        <div>金額: NT$ ${order.price}</div><div class="line"></div>
+        <div class="center bold">您的序號</div><div class="key-box bold">${order.key}</div>
+        <div class="line"></div><div class="center" style="font-size: 10px;">感謝購買，本券請妥善保管</div>
+      </body></html>
+    `;
+    printWindow.document.write(receiptHtml);
+    printWindow.document.close();
+    printWindow.focus();
+    setTimeout(() => { printWindow.print(); printWindow.close(); }, 300);
+  };
+
+  // --- 6. 商品管理邏輯 (更新圖片處理) ---
+  const handleFileChange = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      if (file.size > 800000) { // 約 800KB 限制以防超過 Firestore 1MB 限制
+        alert("圖片檔案過大，請選擇小於 800KB 的圖片。");
+        e.target.value = "";
+        return;
+      }
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setImagePreview(reader.result);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleSaveProduct = async (e) => {
+    e.preventDefault();
+    const formData = new FormData(e.target);
+    
+    const pData = {
+      name: formData.get('name').trim(),
+      price: Number(formData.get('price')),
+      image: imagePreview || formData.get('image'), // 優先使用本地上傳的 Base64
+      description: formData.get('description'),
+      isActive: formData.get('isActive') === 'on'
+    };
+
+    try {
+      const pRef = editingProduct?.id 
+        ? doc(db, 'artifacts', appId, 'public', 'data', 'products', editingProduct.id)
+        : doc(collection(db, 'artifacts', appId, 'public', 'data', 'products'));
+      await setDoc(pRef, pData, { merge: true });
+      setIsProductModalOpen(false);
+      setEditingProduct(null);
+      setImagePreview("");
+    } catch (err) { 
+      console.error("Save product error:", err);
+      alert("儲存商品失敗，可能是因為圖片過大導致。"); 
+    }
+  };
+
+  const handleExcelImport = async (e) => {
+    if (!window.XLSX) return alert("Excel 函式庫尚未就緒");
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (evt) => {
+      try {
+        const workbook = window.XLSX.read(evt.target.result, { type: 'array' });
+        const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+        const rawData = window.XLSX.utils.sheet_to_json(firstSheet);
+        let count = 0;
+        for (const row of rawData) {
+          const productName = row.Product_Name || row.productName || row['品名'] || row.Product;
+          const serialKey = row.Serial_Key || row.serialKey || row['序號'] || row.Key;
+          if (productName && serialKey) {
+            await setDoc(doc(collection(db, 'artifacts', appId, 'public', 'data', 'keys')), {
+              productName: productName.toString().trim(),
+              key: serialKey.toString().trim(),
+              importTime: new Date().toISOString(),
+              status: 'available',
+              soldTime: null,
+              invoiceNumber: null
+            });
+            count++;
+          }
+        }
+        alert(`匯入完成！成功新增 ${count} 筆序號。`);
+      } catch (err) { alert("匯入失敗"); }
+      e.target.value = '';
+    };
+    reader.readAsArrayBuffer(file);
+  };
+
+  const handlePurchase = async (type) => {
+    if (!cartItem || !appUser) return;
+    if (type === 'mail' && !emailInput) return alert("請輸入 Email");
+    const availableKey = inventory.find(k => k.productName === cartItem.name && k.status === 'available');
+    if (!availableKey) return alert("庫存不足");
+
+    try {
+      const invNo = invoiceInput || `INV-${Date.now().toString().slice(-6)}`;
+      const soldTime = new Date().toISOString();
+      const orderData = {
+        productName: cartItem.name,
+        price: cartItem.price,
+        key: availableKey.key,
+        soldTime,
+        invoiceNumber: invNo,
+        customerEmail: emailInput || "現場取號",
+        soldBy: appUser.username 
+      };
+
+      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'keys', availableKey.id), {
+        status: 'sold',
+        soldTime,
+        invoiceNumber: invNo,
+        customerEmail: orderData.customerEmail,
+        soldBy: orderData.soldBy
+      });
+
+      if (type === 'print') {
+        printReceipt(orderData);
+      } else {
+        alert(`發信指令已發出！\n經手人：${orderData.soldBy}\n序號：${orderData.key}`);
+      }
+      setCartItem(null); setEmailInput(""); setInvoiceInput("");
+    } catch (err) { alert("交易錯誤"); }
+  };
+
+  const handleSaveMailSettings = async (e) => {
+    e.preventDefault();
+    const formData = new FormData(e.target);
+    const data = {
+      serviceId: formData.get('serviceId'),
+      templateId: formData.get('templateId'),
+      publicKey: formData.get('publicKey'),
+      active: formData.get('active') === 'on'
+    };
+    try {
+      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'mail'), data);
+      alert("郵件設定已儲存");
+    } catch (err) { alert("儲存失敗"); }
+  };
+
+  if (loading || !libReady) return <div className="h-screen flex items-center justify-center bg-slate-900 text-white font-sans"><Loader2 className="animate-spin mr-2"/> 加載雲端系統...</div>;
+
+  if (view === 'login') {
+    return (
+      <div className="h-screen bg-slate-100 flex items-center justify-center p-6">
+        <div className="bg-white w-full max-w-md p-10 rounded-[2.5rem] shadow-2xl border border-white">
+          <div className="flex flex-col items-center mb-8">
+            <div className="bg-indigo-600 p-4 rounded-2xl text-white mb-4 shadow-xl shadow-indigo-100"><ShieldCheck size={40}/></div>
+            <h1 className="text-3xl font-black uppercase tracking-tighter">KEYHUB <span className="text-indigo-600">AUTH</span></h1>
+            <p className="text-slate-400 font-bold text-sm">請輸入您的身分憑證以存取系統</p>
+          </div>
+          <form onSubmit={handleLogin} className="space-y-6">
+            <div className="space-y-2">
+              <label className="text-xs font-black text-slate-400 uppercase tracking-widest ml-1">帳號名稱</label>
+              <input type="text" required value={loginForm.username} onChange={e => setLoginForm({...loginForm, username: e.target.value})} className="w-full bg-slate-50 border-2 border-slate-100 p-4 rounded-2xl focus:border-indigo-600 outline-none font-bold" placeholder="Username" />
+            </div>
+            <div className="space-y-2">
+              <label className="text-xs font-black text-slate-400 uppercase tracking-widest ml-1">登入密碼</label>
+              <input type="password" required value={loginForm.password} onChange={e => setLoginForm({...loginForm, password: e.target.value})} className="w-full bg-slate-50 border-2 border-slate-100 p-4 rounded-2xl focus:border-indigo-600 outline-none font-bold" placeholder="Password" />
+            </div>
+            <button type="submit" className="w-full py-5 bg-indigo-600 text-white font-black text-lg rounded-2xl hover:bg-indigo-700 transition shadow-xl shadow-indigo-100 transform active:scale-95">確認登入</button>
+          </form>
+          <p className="text-center mt-8 text-xs text-slate-300 font-medium">預設管理員：admin / 123</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-slate-50 text-slate-900 font-sans">
+      <nav className="bg-white border-b sticky top-0 z-40 shadow-sm">
+        <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
+          <div className="flex items-center gap-2 cursor-pointer" onClick={() => setView('shop')}>
+            <div className="bg-indigo-600 p-1.5 rounded-lg text-white"><ShoppingBag size={20} /></div>
+            <span className="font-bold text-xl uppercase tracking-tighter">Key<span className="text-indigo-600">Hub</span></span>
+          </div>
+          
+          <div className="flex bg-slate-100 p-1 rounded-xl gap-1">
+            <button onClick={() => setView('shop')} className={`px-4 py-1.5 rounded-lg font-bold text-xs transition ${view === 'shop' || view === 'product_detail' ? 'bg-white shadow text-indigo-600' : 'text-slate-500'}`}>商店</button>
+            {appUser.role === 'admin' && (
+              <>
+                <button onClick={() => setView('admin_products')} className={`px-4 py-1.5 rounded-lg font-bold text-xs transition ${view === 'admin_products' ? 'bg-white shadow text-indigo-600' : 'text-slate-500'}`}>商品</button>
+                <button onClick={() => setView('admin_keys')} className={`px-4 py-1.5 rounded-lg font-bold text-xs transition ${view === 'admin_keys' ? 'bg-white shadow text-indigo-600' : 'text-slate-500'}`}>庫存</button>
+                <button onClick={() => setView('admin_accounts')} className={`px-4 py-1.5 rounded-lg font-bold text-xs transition ${view === 'admin_accounts' ? 'bg-white shadow text-indigo-600' : 'text-slate-500'}`}>帳號</button>
+                <button onClick={() => setView('admin_settings')} className={`px-4 py-1.5 rounded-lg font-bold text-xs transition ${view === 'admin_settings' ? 'bg-white shadow text-indigo-600' : 'text-slate-500'}`}>設定</button>
+              </>
+            )}
+          </div>
+
+          <div className="flex items-center gap-4">
+            <div className="text-right hidden sm:block">
+              <p className="text-[10px] font-black text-slate-400 uppercase">當前使用者</p>
+              <p className="text-xs font-black text-indigo-600">{appUser.username} ({appUser.role})</p>
+            </div>
+            <button onClick={handleLogout} className="p-2 bg-slate-100 rounded-lg text-slate-400 hover:bg-red-50 hover:text-red-500 transition"><LogOut size={18}/></button>
+          </div>
+        </div>
+      </nav>
+
+      <main className="max-w-7xl mx-auto p-6 md:p-10">
+        {/* --- 商店視圖 --- */}
+        {view === 'shop' && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 animate-in fade-in duration-500">
+            {products.filter(p => p.isActive).map(p => (
+              <div key={p.id} onClick={() => { setSelectedProduct(p); setView('product_detail'); }} className="bg-white rounded-3xl p-2 border border-slate-100 shadow-sm hover:shadow-xl transition-all cursor-pointer group">
+                <div className="aspect-[4/5] rounded-2xl overflow-hidden relative">
+                  <img src={p.image} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" alt="" />
+                </div>
+                <div className="p-4">
+                  <h3 className="font-bold text-lg mb-1 truncate">{p.name}</h3>
+                  <div className="flex justify-between items-center mt-2">
+                    <span className="text-indigo-600 font-black">NT$ {p.price}</span>
+                    <span className={`text-xs font-bold px-2 py-1 rounded-md ${getStockCount(p.name) > 0 ? 'bg-green-50 text-green-600' : 'bg-red-50 text-red-600'}`}>剩餘: {getStockCount(p.name)}</span>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* --- 商品管理視圖 (Admin Only) --- */}
+        {view === 'admin_products' && appUser.role === 'admin' && (
+          <div className="space-y-8 animate-in slide-in-from-bottom-5 duration-500">
+            <div className="flex justify-between items-center">
+              <h2 className="text-3xl font-black">商品展示管理</h2>
+              <button onClick={() => { setEditingProduct(null); setImagePreview(""); setIsProductModalOpen(true); }} className="bg-indigo-600 text-white px-6 py-2.5 rounded-xl font-bold flex items-center gap-2 shadow-lg shadow-indigo-100 hover:bg-indigo-700 transition"><Plus size={18}/>新增商品頁</button>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {products.map(p => (
+                <div key={p.id} className="bg-white p-5 rounded-3xl border border-slate-100 flex gap-4 items-center shadow-sm">
+                  <img src={p.image} className="w-20 h-20 rounded-2xl object-cover shadow-sm" alt="" />
+                  <div className="flex-1 min-w-0">
+                    <h4 className="font-bold truncate">{p.name}</h4>
+                    <p className="text-indigo-600 font-bold text-sm">NT$ {p.price} | 庫存: {getStockCount(p.name)}</p>
+                    <div className="flex gap-2 mt-2">
+                      <button onClick={() => { setEditingProduct(p); setImagePreview(p.image); setIsProductModalOpen(true); }} className="p-2 bg-slate-100 rounded-lg hover:bg-indigo-600 hover:text-white transition"><Edit3 size={14}/></button>
+                      <button onClick={async () => { if(confirm("確定刪除此商品頁面？")) await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'products', p.id)); }} className="p-2 bg-red-50 text-red-500 rounded-lg hover:bg-red-500 hover:text-white transition"><Trash2 size={14}/></button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* --- 詳情頁視圖 --- */}
+        {view === 'product_detail' && selectedProduct && (
+          <div className="animate-in slide-in-from-right-5 duration-300">
+            <button onClick={() => setView('shop')} className="mb-6 flex items-center gap-2 text-slate-400 font-bold hover:text-indigo-600 transition"><ChevronLeft size={20}/>返回商店</button>
+            <div className="bg-white rounded-[2.5rem] p-8 md:p-12 shadow-xl flex flex-col md:flex-row gap-12 border border-white">
+              <img src={selectedProduct.image} className="w-full md:w-1/2 aspect-square object-cover rounded-[2rem] shadow-2xl" alt="" />
+              <div className="flex-1 flex flex-col justify-center">
+                <h1 className="text-5xl font-black mb-4 leading-tight">{selectedProduct.name}</h1>
+                <p className="text-slate-500 text-lg mb-8 leading-relaxed whitespace-pre-wrap">{selectedProduct.description || "尚無詳細介紹"}</p>
+                <div className="flex gap-4 mb-10">
+                  <div className="bg-indigo-50 p-6 rounded-3xl flex-1 text-center font-black text-2xl text-indigo-600 border border-indigo-100 shadow-sm">NT$ {selectedProduct.price}</div>
+                  <div className="bg-slate-50 p-6 rounded-3xl flex-1 text-center font-black text-2xl border border-slate-100 shadow-sm">庫存: {getStockCount(selectedProduct.name)}</div>
+                </div>
+                <button disabled={getStockCount(selectedProduct.name) === 0} onClick={() => setCartItem(selectedProduct)} className="w-full py-5 rounded-2xl bg-slate-900 text-white font-black text-xl hover:bg-indigo-600 transition-all disabled:opacity-20 shadow-xl shadow-indigo-100 active:scale-95">結帳並紀錄銷售</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* --- 其他視圖維持原樣 (庫存, 帳號, 設定) --- */}
+        {view === 'admin_keys' && (
+          <div className="space-y-10">
+            <div className="flex justify-between items-center">
+              <h2 className="text-3xl font-black">序號與銷售日誌</h2>
+              <label className="cursor-pointer bg-indigo-600 text-white px-6 py-2.5 rounded-xl font-bold text-sm shadow-lg hover:bg-indigo-700 transition">批次匯入 Excel<input type="file" accept=".xlsx, .xls" className="hidden" onChange={handleExcelImport} /></label>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-6">
+              {stockOverview.map(s => (
+                <div key={s.name} className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm">
+                  <h4 className="font-bold text-slate-800 truncate mb-3 border-b pb-2">{s.name}</h4>
+                  <div className="flex justify-between items-center mb-1">
+                    <span className="text-xs text-slate-400 font-bold uppercase">在庫</span><span className={`text-xl font-black ${s.available > 0 ? 'text-green-600' : 'text-red-500'}`}>{s.available}</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-xs text-slate-400 font-bold uppercase">已售</span><span className="text-sm font-bold text-slate-600">{s.sold}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="bg-white rounded-3xl border border-slate-100 overflow-hidden shadow-sm">
+              <table className="w-full text-left text-sm">
+                <thead className="bg-slate-50 border-b font-black text-[10px] text-slate-400 uppercase">
+                  <tr><th className="px-6 py-4">品名</th><th className="px-6 py-4">狀態</th><th className="px-6 py-4">單號</th><th className="px-6 py-4">銷售員</th><th className="px-6 py-4">時間</th></tr>
+                </thead>
+                <tbody className="divide-y">
+                  {inventory.sort((a,b) => (b.soldTime || b.importTime).localeCompare(a.soldTime || a.importTime)).map(k => (
+                    <tr key={k.id} className="hover:bg-slate-50 transition-colors">
+                      <td className="px-6 py-4 font-bold">{k.productName}</td>
+                      <td className="px-6 py-4"><span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase ${k.status === 'available' ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-400'}`}>{k.status === 'available' ? '在庫' : '已售出'}</span></td>
+                      <td className="px-6 py-4 font-mono text-xs">{k.invoiceNumber || "-"}</td>
+                      <td className="px-6 py-4 text-indigo-600 font-black text-xs">{k.soldBy || "-"}</td>
+                      <td className="px-6 py-4 text-[10px] text-slate-400">{k.soldTime ? new Date(k.soldTime).toLocaleString() : '匯入: ' + new Date(k.importTime).toLocaleDateString()}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {view === 'admin_accounts' && appUser.role === 'admin' && (
+          <div className="space-y-8 animate-in slide-in-from-bottom-5">
+            <h2 className="text-3xl font-black">帳號系統管理</h2>
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-10">
+              <form onSubmit={handleSaveUser} className="bg-white p-8 rounded-3xl shadow-xl border border-slate-100 space-y-5 h-fit">
+                <h3 className="font-black text-lg flex items-center gap-2"><Plus size={20} className="text-indigo-600"/> 新增員工</h3>
+                <div className="space-y-4">
+                  <div><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">帳號</label><input name="username" required className="w-full bg-slate-50 border-2 p-3 rounded-xl font-bold outline-none focus:border-indigo-600" /></div>
+                  <div><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">密碼</label><input name="password" type="password" required className="w-full bg-slate-50 border-2 p-3 rounded-xl font-bold outline-none focus:border-indigo-600" /></div>
+                  <div><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">角色權限</label><select name="role" className="w-full bg-slate-50 border-2 p-3 rounded-xl font-bold outline-none focus:border-indigo-600"><option value="sales">銷售員</option><option value="admin">管理員</option></select></div>
+                </div>
+                <button type="submit" className="w-full py-4 bg-indigo-600 text-white font-black rounded-xl hover:bg-indigo-700 shadow-lg shadow-indigo-100">建立帳號</button>
+              </form>
+              <div className="lg:col-span-2 bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden">
+                <table className="w-full text-left text-sm"><thead className="bg-slate-50 border-b text-[10px] text-slate-400 font-black uppercase"><tr><th className="px-6 py-4">帳號</th><th className="px-6 py-4">權限</th><th className="px-6 py-4">操作</th></tr></thead>
+                  <tbody className="divide-y">{systemUsers.map(u => (
+                    <tr key={u.id} className="hover:bg-slate-50"><td className="px-6 py-4 font-bold">{u.username}</td><td className="px-6 py-4"><span className={`px-2 py-0.5 rounded text-[10px] font-black ${u.role === 'admin' ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-500'}`}>{u.role.toUpperCase()}</span></td><td className="px-6 py-4"><button onClick={async () => { if(u.username === 'admin') return alert("不能刪除主管理員"); if(confirm("確定刪除？")) await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', u.id)); }} className="text-red-400 hover:text-red-600"><Trash2 size={16}/></button></td></tr>
+                  ))}</tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {view === 'admin_settings' && appUser.role === 'admin' && (
+          <div className="max-w-xl mx-auto space-y-8">
+            <h2 className="text-3xl font-black text-center">系統通訊設定</h2>
+            <form onSubmit={handleSaveMailSettings} className="bg-white p-8 rounded-[2.5rem] border shadow-xl space-y-6">
+              <div className="space-y-4">
+                <div><label className="text-xs font-black text-slate-400 uppercase tracking-widest ml-1">Service ID</label><input name="serviceId" defaultValue={mailSettings.serviceId} className="w-full bg-slate-50 border-2 p-4 rounded-xl font-bold outline-none focus:border-indigo-600" /></div>
+                <div><label className="text-xs font-black text-slate-400 uppercase tracking-widest ml-1">Template ID</label><input name="templateId" defaultValue={mailSettings.templateId} className="w-full bg-slate-50 border-2 p-4 rounded-xl font-bold outline-none focus:border-indigo-600" /></div>
+                <div><label className="text-xs font-black text-slate-400 uppercase tracking-widest ml-1">Public Key</label><input name="publicKey" defaultValue={mailSettings.publicKey} className="w-full bg-slate-50 border-2 p-4 rounded-xl font-bold outline-none focus:border-indigo-600" /></div>
+              </div>
+              <div className="flex items-center gap-3 bg-slate-50 p-4 rounded-xl"><input name="active" id="active" type="checkbox" defaultChecked={mailSettings.active} className="w-5 h-5 accent-indigo-600" /><label htmlFor="active" className="text-sm font-bold text-slate-700 cursor-pointer">啟用自動郵件指令</label></div>
+              <button type="submit" className="w-full py-4 bg-indigo-600 text-white font-black rounded-xl shadow-lg hover:bg-indigo-700 transition">儲存設定</button>
+            </form>
+          </div>
+        )}
+      </main>
+
+      {/* --- 結帳對話框 --- */}
+      {cartItem && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
+          <div className="bg-white w-full max-w-lg rounded-[2.5rem] shadow-2xl p-8 space-y-6 animate-in zoom-in duration-300">
+            <div className="flex justify-between items-start"><h3 className="text-2xl font-black">結帳確認</h3><button onClick={() => setCartItem(null)} className="text-slate-300 hover:text-slate-500"><Trash2 size={24}/></button></div>
+            <div className="flex gap-4 p-4 bg-slate-50 rounded-2xl border border-slate-100">
+              <img src={cartItem.image} className="w-20 h-20 rounded-xl object-cover shadow-sm" alt="" />
+              <div><p className="font-bold text-lg">{cartItem.name}</p><p className="text-indigo-600 font-black text-2xl">NT$ {cartItem.price}</p></div>
+            </div>
+            <div className="space-y-4">
+              <div><label className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">發票 / 單號</label><input type="text" value={invoiceInput} onChange={e => setInvoiceInput(e.target.value)} placeholder="輸入單據號碼" className="w-full bg-slate-50 border-2 border-slate-100 p-4 rounded-2xl outline-none focus:border-indigo-600 font-bold" /></div>
+              <div><label className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">Email (收序號用)</label><input type="email" value={emailInput} onChange={e => setEmailInput(e.target.value)} placeholder="example@gmail.com" className="w-full bg-slate-50 border-2 border-slate-100 p-4 rounded-2xl outline-none focus:border-indigo-600 font-bold" /></div>
+            </div>
+            <div className="bg-indigo-50 p-4 rounded-xl text-center border border-indigo-100 font-black text-xs text-indigo-700 uppercase tracking-widest">銷售專員：{appUser.username}</div>
+            <div className="grid grid-cols-2 gap-4">
+              <button onClick={() => handlePurchase('print')} className="flex flex-col items-center gap-2 p-5 bg-slate-900 text-white rounded-2xl hover:bg-slate-800 transition"><Printer size={24}/><span className="font-bold text-sm">列印收據</span></button>
+              <button onClick={() => handlePurchase('mail')} className="flex flex-col items-center gap-2 p-5 border-2 border-indigo-600 text-indigo-600 rounded-2xl hover:bg-indigo-50 transition"><Mail size={24}/><span className="font-bold text-sm">寄送郵件</span></button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* --- 商品編輯 Modal (支援上傳圖片) --- */}
+      {isProductModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
+          <div className="bg-white w-full max-w-2xl rounded-[3rem] shadow-2xl p-10 animate-in zoom-in duration-200 overflow-y-auto max-h-[90vh]">
+            <h3 className="text-2xl font-black mb-6">{editingProduct ? '編輯展品資訊' : '新增商店展品'}</h3>
+            <form onSubmit={handleSaveProduct} className="space-y-6">
+              
+              {/* 圖片上傳區塊 */}
+              <div className="flex flex-col items-center gap-4 p-6 bg-slate-50 rounded-[2rem] border-2 border-dashed border-slate-200">
+                {imagePreview ? (
+                  <div className="relative group">
+                    <img src={imagePreview} className="w-40 h-40 object-cover rounded-2xl shadow-lg border-2 border-white" alt="Preview" />
+                    <button type="button" onClick={() => { setImagePreview(""); if(fileInputRef.current) fileInputRef.current.value=""; }} className="absolute -top-2 -right-2 bg-red-500 text-white p-1 rounded-full shadow-lg opacity-0 group-hover:opacity-100 transition-opacity"><Trash2 size={16}/></button>
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center text-slate-400 py-4">
+                    <ImageIcon size={48} strokeWidth={1} />
+                    <p className="text-xs font-bold mt-2">尚未上傳產品圖片</p>
+                  </div>
+                )}
+                <div className="flex gap-2">
+                  <button type="button" onClick={() => fileInputRef.current?.click()} className="bg-white border border-slate-200 px-4 py-2 rounded-xl text-sm font-bold shadow-sm hover:bg-slate-100 transition-all flex items-center gap-2">
+                    <Upload size={16}/> 本地圖片上傳
+                  </button>
+                </div>
+                <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleFileChange} />
+                <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">或在下方貼上網址</p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1"><label className="text-xs font-bold text-slate-400 uppercase ml-1">遊戲品名</label><input name="name" list="inv-names" defaultValue={editingProduct?.name} required className="w-full bg-slate-50 border-2 border-slate-100 p-3 rounded-xl font-bold outline-none focus:border-indigo-600" /><datalist id="inv-names">{uniqueNamesFromInventory.map(n => <option key={n} value={n}>庫存: {getStockCount(n)}</option>)}</datalist></div>
+                <div className="space-y-1"><label className="text-xs font-bold text-slate-400 uppercase ml-1">定價</label><input name="price" type="number" defaultValue={editingProduct?.price} required className="w-full bg-slate-50 border-2 border-slate-100 p-3 rounded-xl font-bold outline-none focus:border-indigo-600" /></div>
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-xs font-bold text-slate-400 uppercase ml-1">外部圖片連結 (若沒上傳則採用此處)</label>
+                <input name="image" defaultValue={editingProduct?.image} placeholder="https://..." className="w-full bg-slate-50 border-2 border-slate-100 p-3 rounded-xl outline-none focus:border-indigo-600" />
+              </div>
+
+              <div className="space-y-1"><label className="text-xs font-bold text-slate-400 uppercase ml-1">商品詳細介紹</label><textarea name="description" rows="3" defaultValue={editingProduct?.description} className="w-full bg-slate-50 border-2 border-slate-100 p-3 rounded-xl outline-none focus:border-indigo-600" placeholder="這款遊戲的背景故事或內容描述..." /></div>
+              
+              <div className="flex items-center gap-3 bg-indigo-50 p-4 rounded-2xl border border-indigo-100 shadow-sm">
+                <input name="isActive" id="is_active_check" type="checkbox" defaultChecked={editingProduct?.isActive ?? true} className="w-6 h-6 accent-indigo-600 cursor-pointer"/><label htmlFor="is_active_check" className="font-bold text-indigo-700 cursor-pointer text-sm">立即上架至商店前台顯示</label>
+              </div>
+
+              <div className="flex gap-4 pt-2">
+                <button type="button" onClick={() => setIsProductModalOpen(false)} className="flex-1 py-4 bg-slate-100 rounded-2xl font-bold text-slate-500 hover:bg-slate-200 transition-all">取消返回</button>
+                <button type="submit" className="flex-1 py-4 bg-indigo-600 text-white rounded-2xl font-black shadow-lg shadow-indigo-100 hover:bg-indigo-700 transition-all transform active:scale-95">儲存並同步雲端</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default App;
