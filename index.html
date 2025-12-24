@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Excel 多檔庫存合併工具 (免安裝版)</title>
+    
+    <!-- 1. 載入必要的函式庫 (React, Tailwind, SheetJS) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+    
+    <!-- 簡單的樣式設定 -->
+    <style>
+        body { background-color: #f9fafb; font-family: "Microsoft JhengHei", sans-serif; }
+        .animate-fade-in { animation: fadeIn 0.5s ease-in; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        /* 隱藏原生 file input */
+        input[type="file"] { display: none; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <!-- 2. React 程式邏輯區 -->
+    <script type="text/babel">
+        const { useState, useEffect, useMemo } = React;
+
+        // --- 圖示元件 (使用 SVG 以免依賴外部圖示庫) ---
+        const Icons = {
+            Database: () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>,
+            FileText: () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>,
+            FileSpreadsheet: () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 22h14a2 2 0 0 0 2-2V7.5L14.5 2H6a2 2 0 0 0-2 2v4"/><path d="M14 2v6h6"/><path d="M8 13h2"/><path d="M8 17h2"/><path d="M14 13h2"/><path d="M14 17h2"/><path d="M5 13v-3h18v3"/><path d="M5 17v-3h18v3"/></svg>,
+            Upload: () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>,
+            Trash2: () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>,
+            Plus: () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>,
+            Settings: () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.47a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.39a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>,
+            Check: () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>,
+            Download: () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>,
+            RefreshCw: () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/></svg>,
+            ArrowRight: () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>,
+            ArrowLeftRight: () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="17 11 21 7 17 3"></polyline><line x1="21" y1="7" x2="9" y2="7"></line><polyline points="7 21 3 17 7 13"></polyline><line x1="3" y1="17" x2="15" y2="17"></line></svg>,
+            Type: () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="4 7 4 4 20 4 20 7"></polyline><line x1="9" y1="20" x2="15" y2="20"></line><line x1="12" y1="4" x2="12" y2="20"></line></svg>,
+        };
+
+        const Button = ({ children, onClick, disabled, variant = 'primary', className = '' }) => {
+            const baseStyle = "px-4 py-2 rounded-lg font-medium transition-colors duration-200 flex items-center justify-center gap-2";
+            const variants = {
+                primary: "bg-blue-600 text-white hover:bg-blue-700 disabled:bg-blue-300",
+                secondary: "bg-gray-100 text-gray-700 hover:bg-gray-200 disabled:bg-gray-100",
+                outline: "border-2 border-gray-200 text-gray-600 hover:border-blue-500 hover:text-blue-500",
+                danger: "bg-red-50 text-red-600 hover:bg-red-100"
+            };
+            return (
+                <button onClick={onClick} disabled={disabled} className={`${baseStyle} ${variants[variant]} ${className}`}>
+                    {children}
+                </button>
+            );
+        };
+
+        const Card = ({ children, className = '' }) => (
+            <div className={`bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden ${className}`}>
+                {children}
+            </div>
+        );
+
+        // --- 主程式元件 ---
+        function ExcelMerger() {
+            const [step, setStep] = useState(1);
+            const [isLoading, setIsLoading] = useState(false);
+            
+            const [masterFile, setMasterFile] = useState(null);
+            const [compareFiles, setCompareFiles] = useState([]); 
+            
+            const [masterWorkbook, setMasterWorkbook] = useState(null);
+            const [masterSheetName, setMasterSheetName] = useState('');
+            const [masterHeaders, setMasterHeaders] = useState([]);
+            const [masterData, setMasterData] = useState([]);
+            const [masterKeyCol, setMasterKeyCol] = useState('');
+            const [masterValCol, setMasterValCol] = useState(''); 
+
+            const [compareConfigs, setCompareConfigs] = useState([]);
+
+            const [mergedData, setMergedData] = useState([]);
+            const [orphanData, setOrphanData] = useState([]); 
+            const [finalLabels, setFinalLabels] = useState({});
+            const [finalHeaderOrder, setFinalHeaderOrder] = useState([]); 
+
+            const readFile = (file) => {
+                return new Promise((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onload = (e) => {
+                        const data = e.target.result;
+                        const workbook = XLSX.read(data, { type: 'binary' });
+                        resolve({ file, workbook });
+                    };
+                    reader.onerror = reject;
+                    reader.readAsBinaryString(file);
+                });
+            };
+
+            const handleMasterUpload = async (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                setMasterFile(file);
+                const { workbook } = await readFile(file);
+                setMasterWorkbook(workbook);
+                setMasterSheetName(workbook.SheetNames[0]);
+            };
+
+            const handleCompareUpload = (e) => {
+                const files = Array.from(e.target.files);
+                setCompareFiles(prev => [...prev, ...files]);
+            };
+
+            const removeCompareFile = (index) => {
+                setCompareFiles(prev => prev.filter((_, i) => i !== index));
+            };
+
+            useEffect(() => {
+                if (masterWorkbook && masterSheetName) {
+                    const ws = masterWorkbook.Sheets[masterSheetName];
+                    const json = XLSX.utils.sheet_to_json(ws, { header: 1 });
+                    if (json.length > 0) {
+                        const headers = json[0];
+                        setMasterHeaders(headers);
+                        setMasterData(XLSX.utils.sheet_to_json(ws));
+                        const potentialKey = headers.find(h => /id|sku|part|no|料號|編號/i.test(h));
+                        if (potentialKey) setMasterKeyCol(potentialKey);
+                        const potentialVal = headers.find(h => /qty|stock|count|amount|數量|庫存/i.test(h));
+                        if (potentialVal) setMasterValCol(potentialVal);
+                    }
+                }
+            }, [masterWorkbook, masterSheetName]);
+
+            const initConfigs = async () => {
+                setIsLoading(true);
+                try {
+                    const newConfigs = [];
+                    for (let i = 0; i < compareFiles.length; i++) {
+                        const file = compareFiles[i];
+                        const { workbook } = await readFile(file);
+                        const firstSheet = workbook.SheetNames[0];
+                        const ws = workbook.Sheets[firstSheet];
+                        const rawData = XLSX.utils.sheet_to_json(ws);
+                        const headers = XLSX.utils.sheet_to_json(ws, { header: 1 })[0] || [];
+                        const defaultLabel = file.name.replace(/\.[^/.]+$/, "");
+                        const guessKey = headers.find(h => /id|sku|part|no|料號|編號/i.test(h)) || '';
+                        const guessVal = headers.find(h => /qty|stock|count|amount|數量|庫存/i.test(h)) || '';
+                        const guessLabelCol = headers.find(h => /warehouse|store|site|倉|店/i.test(h)) || '';
+
+                        newConfigs.push({
+                            id: i, 
+                            fileName: file.name,
+                            headers: headers,
+                            data: rawData,
+                            label: defaultLabel,
+                            keyCol: guessKey,
+                            valCol: guessVal,
+                            headerMode: 'manual', 
+                            headerCol: guessLabelCol
+                        });
+                    }
+                    setCompareConfigs(newConfigs);
+                    setStep(2);
+                } catch (e) {
+                    console.error(e);
+                    alert("讀取檔案錯誤");
+                } finally {
+                    setIsLoading(false);
+                }
+            };
+
+            const updateConfig = (index, field, value) => {
+                const newConfigs = [...compareConfigs];
+                newConfigs[index][field] = value;
+                setCompareConfigs(newConfigs);
+            };
+
+            const handleProcess = async () => {
+                setIsLoading(true);
+                setTimeout(() => {
+                    try {
+                        const resultRows = JSON.parse(JSON.stringify(masterData));
+                        const masterMap = new Map();
+                        resultRows.forEach(row => {
+                            const key = row[masterKeyCol] !== undefined ? String(row[masterKeyCol]).trim() : "UNDEFINED";
+                            if (key !== "UNDEFINED") masterMap.set(key, row);
+                        });
+
+                        const orphans = [];
+                        const resolvedLabels = {}; 
+
+                        compareConfigs.forEach(config => {
+                            const { keyCol, valCol, data, fileName, headerMode, headerCol, label } = config;
+                            let targetColName = fileName;
+                            if (headerMode === 'manual') {
+                                targetColName = label || fileName;
+                            } else if (headerMode === 'from_col' && headerCol) {
+                                const sampleRow = data.find(r => r[headerCol] && String(r[headerCol]).trim() !== '');
+                                targetColName = sampleRow ? String(sampleRow[headerCol]).trim() : `${fileName}_(無資料)`;
+                            }
+                            resolvedLabels[config.id] = targetColName;
+
+                            data.forEach(row => {
+                                const rowKey = row[keyCol] !== undefined ? String(row[keyCol]).trim() : null;
+                                const rowVal = row[valCol];
+                                if (rowKey) {
+                                    if (masterMap.has(rowKey)) {
+                                        const masterRow = masterMap.get(rowKey);
+                                        masterRow[targetColName] = rowVal; 
+                                    } else {
+                                        orphans.push({ sourceFileId: config.id, data: row });
+                                    }
+                                }
+                            });
+                        });
+
+                        const newComparisonCols = compareConfigs.map(c => resolvedLabels[c.id]);
+                        let newHeaderOrder = [];
+                        if (masterValCol && masterHeaders.includes(masterValCol)) {
+                            const insertIndex = masterHeaders.indexOf(masterValCol) + 1;
+                            newHeaderOrder = [...masterHeaders.slice(0, insertIndex), ...newComparisonCols, ...masterHeaders.slice(insertIndex)];
+                        } else {
+                            newHeaderOrder = [...masterHeaders, ...newComparisonCols];
+                        }
+
+                        const reorderedData = resultRows.map(row => {
+                            const newRow = {};
+                            newHeaderOrder.forEach(h => { newRow[h] = row[h]; });
+                            return newRow;
+                        });
+
+                        setFinalLabels(resolvedLabels);
+                        setFinalHeaderOrder(newHeaderOrder);
+                        setMergedData(reorderedData);
+                        setOrphanData(orphans);
+                        setStep(3);
+                    } catch (error) {
+                        console.error(error);
+                        alert("處理錯誤");
+                    } finally {
+                        setIsLoading(false);
+                    }
+                }, 100);
+            };
+
+            const sanitizeSheetName = (name) => name.replace(/[*?\/\[\]\\]/g, '').substring(0, 30);
+
+            const downloadReport = () => {
+                const wb = XLSX.utils.book_new();
+                const wsMerged = XLSX.utils.json_to_sheet(mergedData, { header: finalHeaderOrder });
+                XLSX.utils.book_append_sheet(wb, wsMerged, "庫存合併總表");
+
+                let hasOrphans = false;
+                compareConfigs.forEach(config => {
+                    const label = finalLabels[config.id];
+                    const fileOrphans = orphanData.filter(o => o.sourceFileId === config.id).map(o => o.data);
+                    if (fileOrphans.length > 0) {
+                        hasOrphans = true;
+                        const sheetName = sanitizeSheetName(`額外_${label}`);
+                        const ws = XLSX.utils.json_to_sheet(fileOrphans, { header: config.headers });
+                        XLSX.utils.book_append_sheet(wb, ws, sheetName);
+                    }
+                });
+                XLSX.writeFile(wb, "Inventory_Merge_Result.xlsx");
+            };
+
+            return (
+                <div className="min-h-screen bg-gray-50 p-4 md:p-8 font-sans text-gray-800">
+                    <div className="max-w-6xl mx-auto">
+                        <header className="mb-8 border-b pb-4">
+                            <h1 className="text-3xl font-bold text-gray-900 flex items-center gap-3">
+                                <Icons.Database /> Excel 多檔庫存合併工具 (免安裝版)
+                            </h1>
+                            <p className="text-gray-500 mt-2">請上傳您的 Excel 檔案進行合併比對。</p>
+                        </header>
+
+                        {/* 進度條 */}
+                        <div className="flex items-center mb-8">
+                            {[1, 2, 3].map(s => (
+                                <React.Fragment key={s}>
+                                    <div className={`flex items-center gap-2 ${step >= s ? 'text-blue-600 font-bold' : 'text-gray-400'}`}>
+                                        <span className={`w-8 h-8 rounded-full flex items-center justify-center border-2 ${step >= s ? 'border-blue-600 bg-blue-50' : 'border-gray-300'}`}>{s}</span>
+                                        <span className="hidden sm:inline">{s === 1 ? "上傳檔案" : s === 2 ? "欄位設定" : "下載結果"}</span>
+                                    </div>
+                                    {s < 3 && <div className="flex-1 h-px bg-gray-300 mx-4"></div>}
+                                </React.Fragment>
+                            ))}
+                        </div>
+
+                        {/* Step 1: Upload */}
+                        {step === 1 && (
+                            <div className="grid md:grid-cols-12 gap-6 animate-fade-in">
+                                <Card className="md:col-span-5 p-6 border-2 border-blue-100 h-full flex flex-col">
+                                    <h3 className="text-lg font-bold text-blue-800 mb-2 flex items-center gap-2"><Icons.FileText /> 1. 主檔案 (Master)</h3>
+                                    <div className="bg-blue-50 border border-blue-200 border-dashed rounded-lg p-6 text-center flex-1 flex flex-col justify-center items-center">
+                                        {!masterFile ? (
+                                            <>
+                                                <input type="file" id="masterUpload" accept=".xlsx,.xls,.csv" onChange={handleMasterUpload} />
+                                                <label htmlFor="masterUpload" className="cursor-pointer flex flex-col items-center">
+                                                    <div className="w-10 h-10 text-blue-400 mb-2"><Icons.Upload /></div>
+                                                    <span className="text-blue-700 font-medium">上傳主檔</span>
+                                                </label>
+                                            </>
+                                        ) : (
+                                            <div className="w-full">
+                                                <div className="flex items-center justify-between bg-white p-3 rounded shadow-sm border border-blue-100">
+                                                    <div className="flex items-center gap-2 truncate">
+                                                        <div className="w-5 h-5 text-green-600"><Icons.FileSpreadsheet /></div>
+                                                        <span className="font-medium text-gray-700 truncate">{masterFile.name}</span>
+                                                    </div>
+                                                    <button onClick={() => { setMasterFile(null); setMasterWorkbook(null); }} className="text-red-400 hover:text-red-600"><Icons.Trash2 /></button>
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                </Card>
+                                <Card className="md:col-span-7 p-6 border-2 border-orange-100 h-full flex flex-col">
+                                    <h3 className="text-lg font-bold text-orange-800 mb-2 flex items-center gap-2"><Icons.Database /> 2. 來源檔案 (多選)</h3>
+                                    <div className="flex-1 flex flex-col">
+                                        <div className="flex-1 bg-gray-50 rounded-lg border border-gray-200 p-2 overflow-y-auto min-h-[150px] max-h-[300px]">
+                                            {compareFiles.length === 0 ? (
+                                                <div className="h-full flex flex-col items-center justify-center text-gray-400"><div className="w-8 h-8 mb-2 opacity-50"><Icons.Plus /></div><span>尚未加入任何檔案</span></div>
+                                            ) : (
+                                                <ul className="space-y-2">
+                                                    {compareFiles.map((file, idx) => (
+                                                        <li key={idx} className="flex items-center justify-between bg-white p-3 rounded border border-gray-100 text-sm shadow-sm">
+                                                            <div className="flex items-center gap-2 truncate"><span className="bg-orange-100 text-orange-800 text-xs px-2 py-0.5 rounded-full font-bold">{idx + 1}</span><span className="truncate font-medium text-gray-700">{file.name}</span></div>
+                                                            <button onClick={() => removeCompareFile(idx)} className="text-gray-400 hover:text-red-500 ml-2 p-1"><Icons.Trash2 /></button>
+                                                        </li>
+                                                    ))}
+                                                </ul>
+                                            )}
+                                        </div>
+                                        <div className="mt-4">
+                                            <input type="file" id="compareUpload" multiple accept=".xlsx,.xls,.csv" onChange={handleCompareUpload} />
+                                            <label htmlFor="compareUpload" className="cursor-pointer inline-flex items-center justify-center gap-2 px-4 py-3 bg-orange-100 text-orange-700 rounded-lg hover:bg-orange-200 transition-colors w-full font-medium border border-orange-200"><div className="w-5 h-5"><Icons.Plus /></div> 新增來源檔案</label>
+                                        </div>
+                                    </div>
+                                </Card>
+                            </div>
+                        )}
+
+                        {/* Step 2: Config */}
+                        {step === 2 && (
+                            <div className="animate-fade-in space-y-8">
+                                <Card className="p-6 border-l-4 border-l-blue-500">
+                                    <div className="flex flex-col md:flex-row gap-6">
+                                        <div className="w-full md:w-1/3">
+                                            <h3 className="text-lg font-bold text-gray-800 mb-2">主檔設定</h3>
+                                            <p className="text-sm text-gray-500">設定 Key 值與主要數值欄位，<span className="text-blue-600 font-bold">合併欄位將插入在數值欄位之後。</span></p>
+                                        </div>
+                                        <div className="w-full md:w-2/3 grid md:grid-cols-2 gap-4">
+                                            <div>
+                                                <label className="block text-sm font-medium text-gray-700 mb-1">主檔「料號」 (Key) <span className="text-red-500">*</span></label>
+                                                <select className="w-full border-2 border-blue-200 rounded p-2 bg-white" value={masterKeyCol} onChange={(e) => setMasterKeyCol(e.target.value)}><option value="">請選擇...</option>{masterHeaders.map(h => <option key={h} value={h}>{h}</option>)}</select>
+                                            </div>
+                                            <div>
+                                                <label className="block text-sm font-medium text-gray-700 mb-1">主檔「庫存/數值」 (排序依據)</label>
+                                                <div className="relative">
+                                                    <select className="w-full border-2 border-green-100 rounded p-2 bg-green-50 pr-8" value={masterValCol} onChange={(e) => setMasterValCol(e.target.value)}><option value="">(無 - 放在最後面)</option>{masterHeaders.map(h => <option key={h} value={h}>{h}</option>)}</select>
+                                                    <div className="absolute right-2 top-2.5 w-4 h-4 text-green-600 pointer-events-none"><Icons.ArrowLeftRight /></div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </Card>
+                                <div>
+                                    <h3 className="text-xl font-bold text-gray-800 mb-4 flex items-center gap-2"><Icons.Settings /> 來源檔詳細設定</h3>
+                                    <div className="space-y-6">
+                                        {compareConfigs.map((config, index) => (
+                                            <Card key={index} className="p-4 border border-gray-200 shadow-sm hover:shadow-md transition-shadow">
+                                                <div className="flex items-center gap-2 mb-4 border-b pb-2"><span className="bg-orange-100 text-orange-800 text-xs px-2 py-0.5 rounded-full font-bold">File {index + 1}</span><div className="w-4 h-4 text-gray-500"><Icons.FileSpreadsheet /></div><span className="font-medium text-gray-800">{config.fileName}</span></div>
+                                                <div className="grid md:grid-cols-3 gap-6">
+                                                    <div className="space-y-3">
+                                                        <div>
+                                                            <label className="block text-xs font-medium text-gray-600 mb-1">1. 對應料號 (Key) <span className="text-red-500">*</span></label>
+                                                            <select className="w-full border border-gray-300 rounded px-2 py-1.5 bg-gray-50 text-sm" value={config.keyCol} onChange={(e) => updateConfig(index, 'keyCol', e.target.value)}><option value="">請選擇...</option>{config.headers.map(h => <option key={h} value={h}>{h}</option>)}</select>
+                                                        </div>
+                                                        <div>
+                                                            <label className="block text-xs font-medium text-gray-600 mb-1">2. 抓取數值 (Value) <span className="text-red-500">*</span></label>
+                                                            <select className="w-full border-2 border-green-100 rounded px-2 py-1.5 bg-green-50 text-sm" value={config.valCol} onChange={(e) => updateConfig(index, 'valCol', e.target.value)}><option value="">請選擇...</option>{config.headers.map(h => <option key={h} value={h}>{h}</option>)}</select>
+                                                        </div>
+                                                    </div>
+                                                    <div className="md:col-span-2 bg-blue-50/50 p-3 rounded-lg border border-blue-100">
+                                                        <label className="block text-xs font-bold text-blue-700 mb-2 flex items-center gap-1"><div className="w-3 h-3"><Icons.Type /></div> 3. 表頭名稱來源 (Header)</label>
+                                                        <div className="grid grid-cols-2 gap-4">
+                                                            <div>
+                                                                <div className="flex items-center gap-4 mb-2">
+                                                                    <label className="flex items-center gap-1 cursor-pointer"><input type="radio" name={`headerMode-${index}`} checked={config.headerMode === 'manual'} onChange={() => updateConfig(index, 'headerMode', 'manual')} className="text-blue-600" /><span className="text-sm">手動輸入</span></label>
+                                                                    <label className="flex items-center gap-1 cursor-pointer"><input type="radio" name={`headerMode-${index}`} checked={config.headerMode === 'from_col'} onChange={() => updateConfig(index, 'headerMode', 'from_col')} className="text-blue-600" /><span className="text-sm font-bold text-blue-800">取自欄位</span></label>
+                                                                </div>
+                                                            </div>
+                                                            <div>
+                                                                {config.headerMode === 'manual' ? (
+                                                                    <input type="text" className="w-full border border-gray-300 rounded px-2 py-1.5 focus:ring-2 focus:ring-blue-200 outline-none text-sm" placeholder="輸入表頭名稱" value={config.label} onChange={(e) => updateConfig(index, 'label', e.target.value)} />
+                                                                ) : (
+                                                                    <div className="flex flex-col">
+                                                                        <select className="w-full border border-blue-300 rounded px-2 py-1.5 bg-white text-sm" value={config.headerCol} onChange={(e) => updateConfig(index, 'headerCol', e.target.value)}><option value="">請選擇欄位...</option>{config.headers.map(h => <option key={h} value={h}>{h}</option>)}</select>
+                                                                        <span className="text-[10px] text-gray-500 mt-1">讀取此欄位第一列資料</span>
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </Card>
+                                        ))}
+                                    </div>
+                                </div>
+                                <div className="flex justify-between pt-4">
+                                    <Button variant="secondary" onClick={() => setStep(1)}>上一步</Button>
+                                    <Button onClick={handleProcess} disabled={!masterKeyCol || compareConfigs.some(c => !c.keyCol || !c.valCol) || isLoading} className="w-48">{isLoading ? <div className="w-4 h-4 animate-spin"><Icons.RefreshCw /></div> : "開始合併"}</Button>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Step 3: Result */}
+                        {step === 3 && (
+                            <div className="animate-fade-in text-center py-12">
+                                <div className="inline-flex items-center justify-center w-20 h-20 bg-green-100 text-green-600 rounded-full mb-6 shadow-sm"><div className="w-10 h-10"><Icons.Check /></div></div>
+                                <h2 className="text-2xl font-bold text-gray-900 mb-2">合併完成！</h2>
+                                <p className="text-gray-600 mb-8 max-w-lg mx-auto">主檔資料已整合。發現 <strong>{orphanData.length}</strong> 筆額外料號，已依據檔案來源自動分頁。</p>
+                                <div className="flex justify-center gap-4 mb-12">
+                                    <Button variant="secondary" onClick={() => window.location.reload()}>重新開始</Button>
+                                    <Button onClick={downloadReport} className="pl-8 pr-8 py-3 text-lg shadow-lg bg-green-600 hover:bg-green-700"><div className="w-5 h-5"><Icons.Download /></div> 下載報表 (.xlsx)</Button>
+                                </div>
+                                <div className="mt-8 text-left max-w-5xl mx-auto bg-white border rounded-xl overflow-hidden shadow-lg">
+                                    <div className="bg-gray-50 p-4 border-b flex justify-between items-center"><span className="font-bold text-gray-700">預覽 (前 5 筆)</span></div>
+                                    <div className="overflow-x-auto">
+                                        <table className="w-full text-sm">
+                                            <thead className="bg-gray-50 text-gray-600 font-semibold border-b">
+                                                <tr>{finalHeaderOrder.slice(0, 10).map((h, idx) => (<th key={idx} className={`p-3 text-left border-r min-w-[100px] ${h === masterKeyCol ? 'bg-gray-100 font-bold' : ''} ${h === masterValCol ? 'bg-green-50 text-green-800 border-green-200' : ''} ${Object.values(finalLabels).includes(h) ? 'bg-blue-50 text-blue-800' : ''}`}>{h}</th>))}</tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-gray-100">
+                                                {mergedData.slice(0, 5).map((row, i) => (<tr key={i} className="hover:bg-gray-50 transition-colors">{finalHeaderOrder.slice(0, 10).map((h, idx) => (<td key={idx} className={`p-3 border-r ${h === masterValCol ? 'bg-green-50/30 font-medium' : ''} ${Object.values(finalLabels).includes(h) ? 'bg-blue-50/30 font-bold' : ''}`}>{row[h] !== undefined ? row[h] : '-'}</td>))}</tr>))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {step === 1 && (
+                             <div className="mt-8 flex justify-end">
+                                <Button onClick={initConfigs} disabled={!masterFile || compareFiles.length === 0 || isLoading} className="pl-8 pr-8">{isLoading ? <div className="w-4 h-4 animate-spin"><Icons.RefreshCw /></div> : "下一步：設定"} {!isLoading && <div className="w-4 h-4"><Icons.ArrowRight /></div>}</Button>
+                             </div>
+                        )}
+                    </div>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<ExcelMerger />);
+    </script>
+</body>
+</html>
