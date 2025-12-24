@@ -86,7 +86,7 @@
             const [deleteConfirm, setDeleteConfirm] = useState({ show: false, id: null, type: '' });
             
             const [cartItem, setCartItem] = useState(null);
-            const [checkoutStep, setCheckoutStep] = useState(1); // 1: 顯示條碼, 2: 輸入資訊
+            const [checkoutStep, setCheckoutStep] = useState(1); 
             const [emailInput, setEmailInput] = useState("");
             const [loginForm, setLoginForm] = useState({ username: '', password: '' });
             const [imagePreview, setImagePreview] = useState("");
@@ -146,7 +146,12 @@
                     }
                     if (list.length === 0 || !list.some(u => String(u.username || "").toLowerCase() === 'admin')) {
                         try {
-                            await dataRef.collection('users').add({ username: 'admin', password: '123', role: 'admin' });
+                            await dataRef.collection('users').add({ 
+                                username: 'admin', 
+                                password: '123', 
+                                role: 'admin',
+                                realName: '系統管理員' 
+                            });
                         } catch(e) {}
                     }
                     setSystemUsers(list);
@@ -261,12 +266,15 @@
                 e.preventDefault();
                 const formData = new FormData(e.target);
                 const username = formData.get('username').trim();
+                const realName = formData.get('realName').trim();
+                
                 let role = formData.get('role');
                 if (!role && editingUser) role = editingUser.role;
                 if (username.toLowerCase() === 'admin') role = 'admin';
 
                 const uData = {
                     username: username,
+                    realName: realName || username, // 存入中文名稱
                     password: formData.get('password').trim(),
                     role: role || 'sales'
                 };
@@ -345,15 +353,33 @@
                 if (!keyDoc) return showToast("庫存已售完", "error");
                 const invNo = `INV-${Date.now().toString().slice(-6)}`;
                 const soldTime = new Date().toISOString();
+                
+                // 帶入人員姓名：優先用 realName，其次用 username
+                const sellerName = appUser.realName || appUser.username;
+
                 await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('keys').doc(keyDoc.id).update({
-                    status: 'sold', customerEmail: emailInput || "現場客戶", soldTime: soldTime, soldBy: appUser.username, invNo: invNo
+                    status: 'sold', 
+                    customerEmail: emailInput || "現場客戶", 
+                    soldTime: soldTime, 
+                    soldBy: sellerName, 
+                    invNo: invNo
                 });
+
                 const productRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('products').doc(cartItem.id);
                 await productRef.update({ listedQty: Math.max(0, (cartItem.listedQty || 0) - 1) });
-                setLastSoldKey({ key: keyDoc.key, productName: cartItem.name, price: cartItem.price, invNo: invNo, time: soldTime, seller: appUser.username });
+                
+                setLastSoldKey({ 
+                    key: keyDoc.key, 
+                    productName: cartItem.name, 
+                    price: cartItem.price, 
+                    invNo: invNo, 
+                    time: soldTime, 
+                    seller: sellerName 
+                });
+                
                 showToast("訂單已完成");
                 setCartItem(null);
-                setCheckoutStep(1); // 重置結帳步驟
+                setCheckoutStep(1); 
                 setEmailInput("");
             };
 
@@ -374,34 +400,59 @@
             const printReceipt = () => {
                 if (!lastSoldKey) return;
                 const printWin = window.open('', '', 'width=400,height=600');
-                printWin.document.write(`<html><head><title>Receipt</title><style>body { font-family: sans-serif; padding: 10px; width: 75mm; margin: 0 auto; color: #000; }.center { text-align: center; }.divider { border-top: 1px dashed #000; margin: 8px 0; }.header { font-size: 18px; font-weight: bold; }.item-name { font-size: 14px; font-weight: bold; margin: 8px 0; }.serial-box { border: 2px solid #000; padding: 8px; margin: 10px 0; font-size: 18px; font-weight: 900; word-break: break-all; text-transform: uppercase; }.info { font-size: 11px; line-height: 1.4; }</style></head><body><div class="center header">KEYHUB PRO</div><div class="center info">數位授權產品收據</div><div class="divider"></div><div class="info">單號: ${lastSoldKey.invNo}<br>時間: ${new Date(lastSoldKey.time).toLocaleString()}<br>銷售: ${lastSoldKey.seller}</div><div class="divider"></div><div class="item-name">${lastSoldKey.productName}</div><div class="info">金額: NT$ ${lastSoldKey.price}</div><div class="center" style="margin-top:15px; font-size: 10px;">[ 產品兌換序號 ]</div><div class="center serial-box">${lastSoldKey.key}</div><div class="divider"></div><div class="center info" style="font-size:9px;">請妥善保管收據。<br>感謝購買！</div><script>window.onload = function() { window.print(); window.close(); }<\/script></body></html>`);
+                printWin.document.write(`
+                    <html>
+                    <head>
+                        <title>Receipt</title>
+                        <style>
+                            @page { size: 57mm 90mm; margin: 0; }
+                            * { box-sizing: border-box; -webkit-print-color-adjust: exact; }
+                            body { font-family: sans-serif; padding: 5mm; width: 57mm; height: 90mm; margin: 0 auto; color: #000; overflow: hidden; display: flex; flex-direction: column; }
+                            .center { text-align: center; }
+                            .divider { border-top: 1px dashed #000; margin: 5mm 0; width: 100%; }
+                            .header { font-size: 16px; font-weight: 900; margin-bottom: 2px; }
+                            .sub-header { font-size: 10px; margin-bottom: 4px; }
+                            .item-name { font-size: 12px; font-weight: bold; margin: 5px 0; word-break: break-all; line-height: 1.2; }
+                            .serial-box { border: 1.5px solid #000; padding: 6px 4px; margin: 8px 0; font-size: 16px; font-weight: 900; word-break: break-all; text-transform: uppercase; line-height: 1.1; }
+                            .info { font-size: 9px; line-height: 1.3; word-break: break-all; }
+                            .footer { font-size: 8px; margin-top: auto; padding-top: 5px; }
+                        </style>
+                    </head>
+                    <body>
+                        <div class="center header">KEYHUB PRO</div>
+                        <div class="center sub-header">數位授權產品收據</div>
+                        <div class="divider"></div>
+                        <div class="info">
+                            單號: ${lastSoldKey.invNo}<br>
+                            時間: ${new Date(lastSoldKey.time).toLocaleString()}<br>
+                            銷售: ${lastSoldKey.seller}
+                        </div>
+                        <div class="divider"></div>
+                        <div class="item-name">${lastSoldKey.productName}</div>
+                        <div class="info">金額: NT$ ${lastSoldKey.price}</div>
+                        <div class="center" style="margin-top:10px; font-size: 9px; font-weight:bold;">[ 產品兌換序號 ]</div>
+                        <div class="center serial-box">${lastSoldKey.key}</div>
+                        <div class="divider"></div>
+                        <div class="center footer">請妥善保管收據，遺失恕不補發。<br>感謝購買！</div>
+                        <script>window.onload = function() { window.print(); window.close(); }<\/script>
+                    </body>
+                    </html>
+                `);
                 printWin.document.close();
                 setLastSoldKey(null);
             };
 
-            // --- 條碼生成組件 (使用 JsBarcode 真實編碼) ---
             const BarcodeUI = ({ code }) => {
                 const svgRef = useRef(null);
-                
                 useEffect(() => {
                     if (svgRef.current && code) {
                         try {
                             JsBarcode(svgRef.current, code, {
-                                format: "CODE128",
-                                width: 2,
-                                height: 60,
-                                displayValue: true,
-                                fontSize: 18,
-                                fontOptions: "bold",
-                                background: "#ffffff",
-                                margin: 10
+                                format: "CODE128", width: 2, height: 60, displayValue: true, fontSize: 18, fontOptions: "bold", background: "#ffffff", margin: 10
                             });
-                        } catch (err) {
-                            console.error("條碼生成失敗:", err);
-                        }
+                        } catch (err) { console.error("條碼生成失敗:", err); }
                     }
                 }, [code]);
-
                 return (
                     <div className="flex flex-col items-center bg-white p-2 rounded-xl border border-slate-200 overflow-hidden shadow-inner">
                         <svg ref={svgRef}></svg>
@@ -427,7 +478,7 @@
 
             return (
                 <div className="min-h-screen bg-slate-50 flex flex-col text-slate-800 font-sans">
-                    <nav className="bg-white border-b h-16 flex items-center px-6 justify-between sticky top-0 z-40 shadow-sm">
+                    <nav className="bg-white border-b h-16 flex items-center px-6 justify-between sticky top-0 z-40 shadow-sm text-left">
                         <div className="flex items-center gap-2 font-black text-xl cursor-pointer" onClick={() => setView('shop')}>
                             <div className="bg-indigo-600 p-1.5 rounded-lg text-white shadow-sm flex items-center justify-center"><i className="fa-solid fa-key text-sm"></i></div>
                             <span>KeyHub</span>
@@ -443,7 +494,13 @@
                                 </>
                             )}
                         </div>
-                        <button onClick={() => { setAppUser(null); setView('login'); }} className="p-2 text-slate-400 hover:text-red-500 transition-colors"><i className="fa-solid fa-right-from-bracket"></i></button>
+                        <div className="flex items-center gap-4">
+                            <div className="hidden md:block text-right">
+                                <p className="text-[10px] font-black text-slate-400 uppercase leading-none">{appUser.role}</p>
+                                <p className="text-xs font-bold text-slate-700 leading-none mt-1">{appUser.realName || appUser.username}</p>
+                            </div>
+                            <button onClick={() => { setAppUser(null); setView('login'); }} className="p-2 text-slate-400 hover:text-red-500 transition-colors"><i className="fa-solid fa-right-from-bracket"></i></button>
+                        </div>
                     </nav>
 
                     <main className="flex-1 max-w-7xl mx-auto w-full p-6 animate-fade-in text-left">
@@ -454,7 +511,7 @@
                                         <div key={p.id} onClick={() => { setSelectedProduct(p); setView('detail'); }} className="bg-white p-3 rounded-3xl border border-slate-100 shadow-sm hover:shadow-lg transition-all cursor-pointer group">
                                             <div className="aspect-square rounded-2xl overflow-hidden bg-slate-100 mb-4"><img src={p.image} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" /></div>
                                             <div className="p-2">
-                                                <h3 className="font-bold text-slate-800 truncate">{p.name}</h3>
+                                                <h3 className="font-bold text-slate-800 truncate text-sm">{p.name}</h3>
                                                 <div className="flex justify-between items-center mt-2">
                                                     <span className="text-indigo-600 font-black">NT$ {p.price}</span>
                                                     <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${getDisplayStockCount(p) > 0 ? 'bg-green-50 text-green-600' : 'bg-red-50 text-red-600'}`}>在庫: {getDisplayStockCount(p)}</span>
@@ -466,28 +523,10 @@
                             </div>
                         )}
 
-                        {view === 'detail' && selectedProduct && (
-                            <div className="max-w-5xl mx-auto bg-white rounded-[2.5rem] p-8 md:p-12 shadow-xl flex flex-col md:flex-row gap-12 items-center text-left text-slate-800">
-                                <div className="w-full md:w-1/2 aspect-square rounded-[2rem] overflow-hidden shadow-2xl border-4 border-slate-50"><img src={selectedProduct.image} className="w-full h-full object-cover" /></div>
-                                <div className="flex-1">
-                                    <div className="flex justify-between items-start mb-4">
-                                        <h2 className="text-5xl font-black text-slate-800 leading-tight">{selectedProduct.name}</h2>
-                                        <button onClick={() => setView('shop')} className="text-slate-300 hover:text-indigo-600 transition-colors"><i className="fa-solid fa-circle-xmark text-3xl"></i></button>
-                                    </div>
-                                    <p className="text-slate-500 text-lg mb-8 leading-relaxed whitespace-pre-wrap">{selectedProduct.description || "數位產品授權，自動發號。"}</p>
-                                    <div className="grid grid-cols-2 gap-4 mb-10 text-center">
-                                        <div className="bg-indigo-50 p-6 rounded-3xl"><p className="text-xs text-indigo-400 font-bold mb-1 uppercase">售價</p><p className="text-3xl font-black text-indigo-600">NT$ {selectedProduct.price}</p></div>
-                                        <div className="bg-slate-50 p-6 rounded-3xl"><p className="text-xs text-slate-400 font-bold mb-1 uppercase">可售數量</p><p className="text-3xl font-black text-slate-700">{getDisplayStockCount(selectedProduct)}</p></div>
-                                    </div>
-                                    <button onClick={() => { setCartItem(selectedProduct); setCheckoutStep(1); }} disabled={getDisplayStockCount(selectedProduct) === 0} className="w-full py-5 bg-slate-900 text-white rounded-2xl font-black text-xl hover:bg-indigo-600 transition-all shadow-xl active:scale-95 disabled:opacity-30">立即下單結帳</button>
-                                </div>
-                            </div>
-                        )}
-
                         {view === 'admin_master_db' && (
                             <div className="space-y-6">
                                 <div className="flex justify-between items-center flex-wrap gap-4 text-slate-800">
-                                    <h2 className="text-2xl font-black text-left w-full sm:w-auto">產品資料庫</h2>
+                                    <h2 className="text-2xl font-black text-left w-full sm:w-auto">產品主資料庫</h2>
                                     <div className="flex gap-4 items-center w-full sm:w-auto">
                                         <div className="relative flex-1">
                                             <i className="fa-solid fa-magnifying-glass absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"></i>
@@ -496,7 +535,7 @@
                                         <button onClick={() => {setEditingMaster(null); setImagePreview(""); setIsMasterModalOpen(true);}} className="bg-indigo-600 text-white px-6 py-2.5 rounded-xl font-bold shadow-md hover:bg-indigo-700 transition whitespace-nowrap text-sm">+ 新增基礎產品</button>
                                     </div>
                                 </div>
-                                <div className="bg-white rounded-[2rem] border shadow-sm overflow-hidden overflow-x-auto text-slate-800 font-medium">
+                                <div className="bg-white rounded-[2rem] border shadow-sm overflow-hidden overflow-x-auto text-slate-800 font-medium text-xs">
                                     <table className="w-full text-left text-sm min-w-[700px]">
                                         <thead className="bg-slate-50 border-b text-[10px] font-black text-slate-400 uppercase tracking-widest">
                                             <tr><th className="px-6 py-5">圖示</th><th className="px-6 py-5">編號 (SKU)</th><th className="px-6 py-5">名稱</th><th className="px-6 py-5">預設金額</th><th className="px-6 py-5 text-right">操作</th></tr>
@@ -520,87 +559,28 @@
                             </div>
                         )}
 
-                        {view === 'admin_products' && (
-                            <div className="space-y-6">
-                                <div className="flex justify-between items-center flex-wrap gap-4 text-slate-800">
-                                    <h2 className="text-2xl font-black text-slate-800">商店上架管理</h2>
-                                    <div className="flex gap-4 items-center w-full sm:w-auto">
-                                        <div className="relative flex-1">
-                                            <i className="fa-solid fa-magnifying-glass absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"></i>
-                                            <input type="text" placeholder="搜尋..." className="pl-10 pr-4 py-2 rounded-xl border bg-white focus:ring-2 focus:ring-indigo-500 outline-none transition-all w-full text-sm" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
-                                        </div>
-                                        <button onClick={() => {setEditingProduct(null); setIsProductModalOpen(true); setImagePreview("");}} className="bg-indigo-600 text-white px-6 py-2.5 rounded-xl font-bold shadow-md hover:bg-indigo-700 transition whitespace-nowrap text-sm">+ 上架商品</button>
-                                    </div>
-                                </div>
-                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                                    {filteredProducts.map(p => (
-                                        <div key={p.id} className="bg-white p-5 rounded-3xl border flex gap-4 items-center shadow-sm text-slate-800 font-medium">
-                                            <img src={p.image} className="w-20 h-20 rounded-2xl object-cover shadow-sm bg-slate-50" />
-                                            <div className="flex-1 min-w-0">
-                                                <div className="flex justify-between items-start"><p className="text-[10px] font-black text-indigo-400 uppercase mb-1">{p.sku}</p><span className={`w-2 h-2 rounded-full ${p.isActive ? 'bg-green-500' : 'bg-slate-300'}`}></span></div>
-                                                <h4 className="font-bold truncate text-slate-700">{p.name}</h4>
-                                                <p className="text-indigo-600 font-black text-sm">NT$ {p.price}</p>
-                                                <p className="text-slate-400 text-[10px] mt-1 font-bold">限額: {p.listedQty} / 在庫: {stockSummary[p.sku]?.available || 0}</p>
-                                                <div className="flex gap-2 mt-2">
-                                                    <button onClick={() => {setEditingProduct(p); setImagePreview(p.image); setIsProductModalOpen(true);}} className="p-1.5 bg-slate-50 rounded-lg text-slate-400 hover:text-indigo-600 transition-colors"><i className="fa-solid fa-pen text-xs"></i></button>
-                                                    <button onClick={() => setDeleteConfirm({ show: true, id: p.id, type: 'product' })} className="p-1.5 bg-slate-50 rounded-lg text-slate-400 hover:text-red-500 transition-colors"><i className="fa-solid fa-trash text-xs"></i></button>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    ))}
-                                </div>
-                            </div>
-                        )}
-
-                        {view === 'admin_keys' && (
-                            <div className="space-y-6">
-                                <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 text-slate-800">
-                                    <div className="flex bg-white rounded-xl p-1 shadow-sm border overflow-hidden">
-                                        <button onClick={() => setInventoryTab('stock')} className={`px-4 py-2 rounded-lg font-bold text-xs transition ${inventoryTab === 'stock' ? 'bg-indigo-600 text-white shadow' : 'text-slate-500'}`}>匯總</button>
-                                        <button onClick={() => setInventoryTab('records')} className={`px-4 py-2 rounded-lg font-bold text-xs transition ${inventoryTab === 'records' ? 'bg-indigo-600 text-white shadow' : 'text-slate-500'}`}>銷售紀錄</button>
-                                        <button onClick={() => setInventoryTab('all_keys')} className={`px-4 py-2 rounded-lg font-bold text-xs transition ${inventoryTab === 'all_keys' ? 'bg-indigo-600 text-white shadow' : 'text-slate-500'}`}>序號刪改</button>
-                                    </div>
-                                    <div className="flex flex-wrap gap-2 items-center w-full md:w-auto">
-                                        <div className="relative flex-1 min-w-[150px]"><i className="fa-solid fa-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs"></i><input type="text" placeholder="搜尋..." className="pl-8 pr-4 py-2 rounded-xl border bg-white text-xs w-full focus:ring-1 focus:ring-indigo-500 outline-none transition-all" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} /></div>
-                                        <button onClick={handleDownloadTemplate} className="bg-slate-100 text-slate-600 px-4 py-2 rounded-xl font-bold text-xs border hover:bg-slate-200 flex items-center gap-2 transition"><i className="fa-solid fa-download"></i> 範例</button>
-                                        <label className="bg-emerald-600 text-white px-4 py-2 rounded-xl font-bold text-xs cursor-pointer hover:bg-emerald-700 shadow-lg flex items-center gap-2 transition whitespace-nowrap"><i className="fa-solid fa-file-excel"></i> 匯入 Excel<input type="file" className="hidden" accept=".xlsx,.xls" onChange={handleExcelImport} /></label>
-                                    </div>
-                                </div>
-                                {inventoryTab === 'stock' && (
-                                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 animate-fade-in text-slate-800 font-bold">
-                                        {Object.entries(stockSummary).map(([sku, stats]) => (
-                                            <div key={sku} className="bg-white p-6 rounded-3xl border shadow-sm space-y-4"><div><p className="text-[10px] font-black text-indigo-400 uppercase mb-1">{sku}</p><h3 className="font-black text-lg text-slate-700 truncate">{stats.name}</h3></div><div className="grid grid-cols-3 gap-2 text-center"><div className="p-2 bg-slate-50 rounded-xl"><p className="text-[10px] text-slate-400 font-bold uppercase">Total</p><p className="font-black">{stats.total}</p></div><div className="p-2 bg-green-50 rounded-xl"><p className="text-[10px] text-green-400 font-bold uppercase">Avail</p><p className="font-black text-green-600">{stats.available}</p></div><div className="p-2 bg-indigo-50 rounded-xl"><p className="text-[10px] text-indigo-400 font-bold uppercase">Sold</p><p className="font-black text-indigo-600">{stats.sold}</p></div></div></div>
-                                        ))}
-                                    </div>
-                                )}
-                                {inventoryTab === 'all_keys' && (
-                                    <div className="bg-white rounded-3xl border shadow-sm overflow-hidden overflow-x-auto animate-fade-in text-slate-800">
-                                        <table className="w-full text-left text-sm min-w-[700px]"><thead className="bg-slate-50 border-b text-[10px] font-black text-slate-400 uppercase tracking-widest"><tr><th className="px-6 py-5">產品</th><th className="px-6 py-5">序號</th><th className="px-6 py-5">狀態</th><th className="px-6 py-5">匯入時間</th><th className="px-6 py-5 text-right">操作</th></tr></thead><tbody className="divide-y text-slate-600 font-medium">{filteredAllKeys.map(k => (<tr key={k.id} className="hover:bg-slate-50"><td className="px-6 py-4"><p className="text-[10px] font-black text-indigo-300 mb-1">{k.sku}</p><p className="font-bold">{k.productName}</p></td><td className="px-6 py-4 font-mono text-xs">{k.key}</td><td className="px-6 py-4"><span className={`px-2 py-1 rounded text-[10px] font-black ${k.status === 'available' ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-400'}`}>{k.status === 'available' ? '在線' : '已售'}</span></td><td className="px-6 py-4 text-[10px] text-slate-400">{new Date(k.importTime).toLocaleString()}</td><td className="px-6 py-4 text-right"><button onClick={() => setDeleteConfirm({ show: true, id: k.id, type: 'key' })} className="p-2 text-slate-300 hover:text-red-600 transition-all"><i className="fa-solid fa-trash-can"></i></button></td></tr>))}</tbody></table>
-                                    </div>
-                                )}
-                                {inventoryTab === 'records' && (
-                                    <div className="bg-white rounded-3xl border shadow-sm overflow-hidden overflow-x-auto animate-fade-in text-slate-800">
-                                        <table className="w-full text-left text-sm min-w-[700px]"><thead className="bg-slate-50 border-b text-[10px] font-black text-slate-400 uppercase tracking-widest"><tr><th className="px-6 py-5">產品</th><th className="px-6 py-5">序號</th><th className="px-6 py-5">單號</th><th className="px-6 py-5">銷售員</th><th className="px-6 py-5">成交時間</th></tr></thead><tbody className="divide-y text-slate-600 font-medium">{salesRecords.map(k => (<tr key={k.id} className="hover:bg-slate-50"><td className="px-6 py-4 font-bold">{k.productName}</td><td className="px-6 py-4 font-mono text-xs">{k.key}</td><td className="px-6 py-4 font-mono text-xs">{k.invNo}</td><td className="px-6 py-4"><span className="bg-indigo-50 text-indigo-600 px-2 py-1 rounded text-[10px] font-black">{k.soldBy}</span></td><td className="px-6 py-4 text-[10px] text-slate-400">{new Date(k.soldTime).toLocaleString()}</td></tr>))}</tbody></table>
-                                    </div>
-                                )}
-                            </div>
-                        )}
-
                         {view === 'admin_accounts' && (
-                            <div className="space-y-6 text-slate-800">
+                            <div className="space-y-6 text-slate-800 text-sm">
                                 <div className="flex justify-between items-center">
-                                    <h2 className="text-2xl font-black">帳號權限管理</h2>
+                                    <h2 className="text-2xl font-black text-left">系統帳號管理</h2>
                                     <button onClick={() => {setEditingUser(null); setIsUserModalOpen(true);}} className="bg-indigo-600 text-white px-6 py-2.5 rounded-xl font-bold shadow-md hover:bg-indigo-700 transition">+ 新增使用者</button>
                                 </div>
-                                <div className="bg-white rounded-[2rem] border shadow-sm overflow-hidden overflow-x-auto font-medium">
-                                    <table className="w-full text-left text-sm min-w-[500px]">
-                                        <thead className="bg-slate-50 border-b text-[10px] font-black text-slate-400 uppercase tracking-widest">
-                                            <tr><th className="px-6 py-5">帳號</th><th className="px-6 py-5">目前密碼</th><th className="px-6 py-5">角色</th><th className="px-6 py-5 text-right">操作</th></tr>
+                                <div className="bg-white rounded-[2rem] border shadow-sm overflow-hidden overflow-x-auto font-medium text-left">
+                                    <table className="w-full text-left text-sm min-w-[600px]">
+                                        <thead className="bg-slate-50 border-b text-[10px] font-black text-slate-400 uppercase tracking-widest text-left">
+                                            <tr>
+                                                <th className="px-6 py-5">登入帳號</th>
+                                                <th className="px-6 py-5">使用人名稱 (中文)</th>
+                                                <th className="px-6 py-5">目前的密碼</th>
+                                                <th className="px-6 py-5">角色</th>
+                                                <th className="px-6 py-5 text-right">操作</th>
+                                            </tr>
                                         </thead>
                                         <tbody className="divide-y text-slate-600">
                                             {systemUsers.map(u => (
                                                 <tr key={u.id} className="hover:bg-slate-50">
                                                     <td className="px-6 py-4 font-bold text-slate-800">{u.username}</td>
+                                                    <td className="px-6 py-4 text-indigo-600 font-black">{u.realName || '-'}</td>
                                                     <td className="px-6 py-4 font-mono text-xs text-slate-400">{u.password}</td>
                                                     <td className="px-6 py-4"><span className={`px-2 py-1 rounded text-[10px] font-black uppercase ${u.role === 'admin' ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-400'}`}>{u.role}</span></td>
                                                     <td className="px-6 py-4 text-right flex justify-end gap-2">
@@ -633,7 +613,7 @@
                                 <div className="w-16 h-16 bg-red-50 text-red-500 rounded-full flex items-center justify-center mx-auto mb-4 text-2xl flex items-center justify-center"><i className="fa-solid fa-trash-can"></i></div>
                                 <h3 className="text-xl font-black mb-2 text-slate-800 text-center">確定要刪除嗎？</h3>
                                 <p className="text-slate-400 text-sm mb-8 text-center">此操作將永久移除該筆資料。</p>
-                                <div className="flex gap-3">
+                                <div className="flex gap-3 text-sm">
                                     <button onClick={() => setDeleteConfirm({ show: false, id: null, type: '' })} className="flex-1 py-3 font-bold text-slate-400">取消</button>
                                     <button onClick={confirmDeleteAction} className="flex-1 py-3 bg-red-500 text-white rounded-xl font-black shadow-lg">確認刪除</button>
                                 </div>
@@ -651,41 +631,23 @@
                                             <div className="space-y-6 text-center">
                                                 <h3 className="text-2xl font-black tracking-tight text-slate-800">結帳掃描</h3>
                                                 <p className="text-sm text-slate-400 font-bold">請出示此條碼給結帳櫃檯掃描</p>
-                                                
-                                                <div className="py-2">
-                                                    <BarcodeUI code={cartItem.sku} />
-                                                </div>
-
+                                                <div className="py-2"><BarcodeUI code={cartItem.sku} /></div>
                                                 <div className="bg-slate-50 p-5 rounded-[2rem] flex gap-4 items-center border border-slate-100 text-left font-bold">
                                                     <img src={cartItem.image} className="w-16 h-16 rounded-2xl object-cover shadow-sm" />
-                                                    <div>
-                                                        <p className="text-slate-700">{cartItem.name}</p>
-                                                        <p className="text-indigo-600 font-black text-xl tracking-tighter">NT$ {cartItem.price}</p>
-                                                    </div>
+                                                    <div><p className="text-slate-700">{cartItem.name}</p><p className="text-indigo-600 font-black text-xl tracking-tighter text-sm">NT$ {cartItem.price}</p></div>
                                                 </div>
-
-                                                <div className="flex gap-3 pt-2">
-                                                    <button onClick={() => setCartItem(null)} className="flex-1 py-4 font-bold text-slate-400 hover:text-slate-600 transition-colors">取消</button>
-                                                    <button onClick={() => setCheckoutStep(2)} className="flex-[2] py-4 bg-slate-800 text-white rounded-2xl font-black shadow-lg hover:bg-slate-900 active:scale-95 transition-all flex items-center justify-center gap-2">
-                                                        已完成掃碼 <i className="fa-solid fa-arrow-right"></i>
-                                                    </button>
+                                                <div className="flex gap-3 pt-2 text-sm font-bold text-center">
+                                                    <button onClick={() => setCartItem(null)} className="flex-1 py-4 text-slate-400 hover:text-slate-600 transition-colors">取消</button>
+                                                    <button onClick={() => setCheckoutStep(2)} className="flex-[2] py-4 bg-slate-800 text-white rounded-2xl font-black shadow-lg hover:bg-slate-900 active:scale-95 transition-all flex items-center justify-center gap-2 text-center">已完成掃碼 <i className="fa-solid fa-arrow-right"></i></button>
                                                 </div>
                                             </div>
                                         ) : (
-                                            <div className="animate-fade-in">
-                                                <button onClick={() => setCheckoutStep(1)} className="mb-4 text-xs font-bold text-indigo-500 flex items-center gap-1 hover:underline">
-                                                    <i className="fa-solid fa-chevron-left"></i> 返回條碼頁
-                                                </button>
-                                                <h3 className="text-2xl font-black mb-6 tracking-tight text-slate-800">領取資訊</h3>
-                                                <div className="bg-slate-50 p-5 rounded-[2rem] mb-6 flex gap-4 items-center border border-slate-100 font-bold">
-                                                    <img src={cartItem.image} className="w-16 h-16 rounded-2xl object-cover shadow-sm" />
-                                                    <div><p className="text-slate-800">{cartItem.name}</p><p className="text-indigo-600 font-black text-xl">NT$ {cartItem.price}</p></div>
-                                                </div>
-                                                <div className="space-y-4 mb-8 text-left">
-                                                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">領取人 Email (選填)</label>
-                                                    <input type="email" placeholder="example@gmail.com" className="w-full bg-slate-50 p-4 rounded-2xl border-2 border-slate-100 outline-none focus:border-indigo-600 font-bold transition-all text-slate-800" value={emailInput} onChange={e => setEmailInput(e.target.value)} />
-                                                </div>
-                                                <div className="flex gap-3 text-center font-bold">
+                                            <div className="animate-fade-in text-left">
+                                                <button onClick={() => setCheckoutStep(1)} className="mb-4 text-xs font-bold text-indigo-500 flex items-center gap-1 hover:underline"><i className="fa-solid fa-chevron-left"></i> 返回條碼頁</button>
+                                                <h3 className="text-2xl font-black mb-6 tracking-tight text-slate-800 text-left">領取資訊</h3>
+                                                <div className="bg-slate-50 p-5 rounded-[2rem] mb-6 flex gap-4 items-center border border-slate-100 font-bold text-left"><img src={cartItem.image} className="w-16 h-16 rounded-2xl object-cover shadow-sm" /><div><p className="text-slate-800 text-sm">{cartItem.name}</p><p className="text-indigo-600 font-black text-xl">NT$ {cartItem.price}</p></div></div>
+                                                <div className="space-y-4 mb-8 text-left"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1 text-left block">領取人 Email (選填)</label><input type="email" placeholder="example@gmail.com" className="w-full bg-slate-50 p-4 rounded-2xl border-2 border-slate-100 outline-none focus:border-indigo-600 font-bold transition-all text-slate-800" value={emailInput} onChange={e => setEmailInput(e.target.value)} /></div>
+                                                <div className="flex gap-3 text-center font-bold text-sm">
                                                     <button onClick={() => setCartItem(null)} className="flex-1 py-4 text-slate-400 hover:text-slate-600 transition-colors">取消</button>
                                                     <button onClick={handlePurchase} className="flex-[2] py-4 bg-indigo-600 text-white rounded-2xl font-black shadow-lg hover:bg-indigo-700 active:scale-95 transition-all">確認購買取號</button>
                                                 </div>
@@ -696,11 +658,9 @@
                                     <div className="text-center animate-fade-in">
                                         <div className="w-20 h-20 bg-green-100 text-green-600 rounded-full flex items-center justify-center mx-auto mb-6 text-3xl shadow-sm flex items-center justify-center"><i className="fa-solid fa-check"></i></div>
                                         <h3 className="text-2xl font-black mb-2 text-slate-800">交易完成</h3>
-                                        <p className="text-slate-400 text-sm mb-8 font-bold">收據與序號已準備完畢</p>
-                                        <button onClick={printReceipt} className="w-full py-5 bg-slate-900 text-white rounded-2xl font-black text-xl hover:bg-indigo-600 transition-all shadow-xl active:scale-95 mb-4 flex items-center justify-center gap-3">
-                                            <i className="fa-solid fa-print"></i> 列印收據檔案
-                                        </button>
-                                        <button onClick={() => setLastSoldKey(null)} className="w-full py-3 text-slate-400 font-bold hover:text-slate-600 transition-colors font-bold">返回商店首頁</button>
+                                        <p className="text-slate-400 text-sm mb-8 font-bold text-center">收據與序號已準備完畢</p>
+                                        <button onClick={printReceipt} className="w-full py-5 bg-slate-900 text-white rounded-2xl font-black text-xl hover:bg-indigo-600 transition-all shadow-xl active:scale-95 mb-4 flex items-center justify-center gap-3"><i className="fa-solid fa-print"></i> 列印收據檔案</button>
+                                        <button onClick={() => setLastSoldKey(null)} className="w-full py-3 text-slate-400 font-bold hover:text-slate-600 transition-colors font-bold text-center">返回商店首頁</button>
                                     </div>
                                 )}
                             </div>
@@ -712,60 +672,18 @@
                         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4 animate-fade-in text-left text-slate-800 border">
                             <div className="bg-white w-full max-w-lg rounded-[2.5rem] p-8 shadow-2xl border overflow-y-auto max-h-[90vh]">
                                 <h3 className="text-2xl font-black mb-6 flex items-center gap-2"><i className="fa-solid fa-database text-indigo-600"></i>產品基礎資料設定</h3>
-                                <form onSubmit={handleSaveMasterProduct} className="space-y-6 font-bold">
+                                <form onSubmit={handleSaveMasterProduct} className="space-y-6 font-bold text-sm text-left">
                                     <div className="flex flex-col items-center gap-4 p-6 bg-slate-50 rounded-[2rem] border-2 border-dashed border-slate-200">
                                         {imagePreview ? <img src={imagePreview} className="w-32 h-32 rounded-2xl object-cover shadow-md border-4 border-white" /> : <div className="w-32 h-32 bg-slate-100 rounded-2xl flex items-center justify-center"><i className="fa-solid fa-image text-4xl text-slate-200"></i></div>}
                                         <button type="button" onClick={() => fileInputRef.current.click()} className="text-xs font-bold bg-white px-5 py-2 rounded-xl border shadow-sm">上傳產品預設照片</button>
                                         <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={e => { const file = e.target.files[0]; if (file) { const reader = new FileReader(); reader.onloadend = () => setImagePreview(reader.result); reader.readAsDataURL(file); } }} />
                                     </div>
-                                    <div className="space-y-4">
-                                        <div><label className="text-xs font-black text-slate-400 uppercase">產品編號 (SKU)</label><input name="sku" defaultValue={editingMaster?.sku} required readOnly={!!editingMaster} placeholder="例如: GAME-01" className={`w-full p-4 rounded-2xl border outline-none font-black ${editingMaster ? 'bg-slate-50 text-slate-400' : 'bg-white focus:border-indigo-600'}`} /></div>
-                                        <div><label className="text-xs font-black text-slate-400 uppercase">產品正式名稱</label><input name="name" defaultValue={editingMaster?.name} required className="w-full bg-slate-50 p-4 rounded-2xl border focus:border-indigo-600 outline-none" /></div>
-                                        <div><label className="text-xs font-black text-slate-400 uppercase">基礎金額 (預設售價)</label><input name="basePrice" type="number" defaultValue={editingMaster?.basePrice} required className="w-full bg-slate-50 p-4 rounded-2xl border focus:border-indigo-600 text-indigo-600 outline-none" /></div>
+                                    <div className="space-y-4 text-left">
+                                        <div className="text-left"><label className="text-xs font-black text-slate-400 uppercase text-left block mb-1 ml-1">產品編號 (SKU)</label><input name="sku" defaultValue={editingMaster?.sku} required readOnly={!!editingMaster} placeholder="例如: GAME-01" className={`w-full p-4 rounded-2xl border outline-none font-black ${editingMaster ? 'bg-slate-50 text-slate-400' : 'bg-white focus:border-indigo-600'}`} /></div>
+                                        <div className="text-left"><label className="text-xs font-black text-slate-400 uppercase text-left block mb-1 ml-1">產品正式名稱</label><input name="name" defaultValue={editingMaster?.name} required className="w-full bg-slate-50 p-4 rounded-2xl border focus:border-indigo-600 outline-none" /></div>
+                                        <div className="text-left"><label className="text-xs font-black text-slate-400 uppercase text-left block mb-1 ml-1">基礎金額 (預設售價)</label><input name="basePrice" type="number" defaultValue={editingMaster?.basePrice} required className="w-full bg-slate-50 p-4 rounded-2xl border focus:border-indigo-600 text-indigo-600 outline-none" /></div>
                                     </div>
-                                    <div className="flex gap-3"><button type="button" onClick={() => setIsMasterModalOpen(false)} className="flex-1 font-bold text-slate-400">取消</button><button type="submit" className="flex-1 py-4 bg-indigo-600 text-white rounded-2xl font-black shadow-lg">確認儲存</button></div>
-                                </form>
-                            </div>
-                        </div>
-                    )}
-
-                    {/* 上架 Modal */}
-                    {isProductModalOpen && (
-                        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4 animate-fade-in text-left text-slate-800 border">
-                            <div className="bg-white w-full max-w-2xl rounded-[3rem] p-10 shadow-2xl overflow-y-auto max-h-[90vh] border">
-                                <h3 className="text-2xl font-black mb-6 flex items-center gap-2"><i className="fa-solid fa-cloud-arrow-up text-indigo-600"></i>上架新商品頁面</h3>
-                                <form onSubmit={handleSaveProduct} className="space-y-6">
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-center font-bold">
-                                        <div className="flex flex-col items-center gap-4 p-6 bg-slate-50 rounded-[2.5rem] border-2 border-dashed border-slate-200 text-center font-bold text-slate-400">
-                                            {imagePreview ? <img src={imagePreview} className="w-full aspect-square rounded-[2rem] object-cover shadow-md border-4 border-white" /> : <div className="w-full aspect-square bg-slate-100 rounded-[2rem] flex items-center justify-center text-slate-200"><i className="fa-solid fa-image text-5xl"></i></div>}
-                                            <p className="text-[10px] italic">由產品庫自動帶入</p>
-                                        </div>
-                                        <div className="space-y-6">
-                                            <div>
-                                                <label className="text-xs font-black text-slate-400 uppercase">1. 選擇編號 (SKU)</label>
-                                                <select name="sku" required defaultValue={editingProduct?.sku} className="w-full bg-white p-4 rounded-2xl border outline-none focus:border-indigo-600 font-black text-indigo-600 shadow-sm" onChange={(e) => {
-                                                    const master = masterProducts.find(m => m.sku === e.target.value);
-                                                    if(master && !editingProduct) {
-                                                        const priceInput = e.target.form.elements['price'];
-                                                        if(priceInput) priceInput.value = master.basePrice;
-                                                        if(master.image) setImagePreview(master.image);
-                                                    }
-                                                }}>
-                                                    <option value="">請選擇產品庫...</option>
-                                                    {masterProducts.map(m => <option key={m.id} value={m.sku}>{m.sku} - {m.name}</option>)}
-                                                </select>
-                                                <div className="mt-2 flex justify-between items-center px-2 font-bold">
-                                                    <span className="text-[10px] text-slate-400 font-bold uppercase">目前可用庫存</span>
-                                                    <span className="text-xs font-black text-green-600 bg-green-50 px-2 py-0.5 rounded-full">{stockSummary[editingProduct?.sku || '']?.available || 0}</span>
-                                                </div>
-                                            </div>
-                                            <div><label className="text-xs font-black text-slate-400 uppercase">2. 設定本次上架價格</label><input name="price" type="number" defaultValue={editingProduct?.price} required className="w-full bg-slate-50 p-4 rounded-2xl border focus:border-indigo-600 font-black text-lg outline-none" /></div>
-                                            <div><label className="text-xs font-black text-slate-400 uppercase">3. 上架限額 (數量)</label><input name="listedQty" type="number" defaultValue={editingProduct?.listedQty ?? 10} required className="w-full bg-slate-50 p-4 rounded-2xl border focus:border-indigo-600 font-black text-lg outline-none" /></div>
-                                        </div>
-                                    </div>
-                                    <textarea name="description" rows="3" defaultValue={editingProduct?.description} placeholder="前台詳細說明..." className="w-full bg-slate-50 p-4 rounded-2xl border focus:border-indigo-600 outline-none font-medium text-slate-800" />
-                                    <div className="flex items-center gap-3 bg-indigo-50 p-5 rounded-2xl border border-indigo-100 text-slate-800"><input name="isActive" type="checkbox" id="active-check" defaultChecked={editingProduct?.isActive ?? true} className="w-5 h-5 accent-indigo-600" /><label htmlFor="active-check" className="text-sm font-bold text-indigo-700 cursor-pointer">立即發佈至商店前台</label></div>
-                                    <div className="flex gap-4 pt-4 text-center font-bold"><button type="button" onClick={() => setIsProductModalOpen(false)} className="flex-1 text-slate-400 hover:text-slate-600 transition-colors">取消</button><button type="submit" className="flex-1 py-4 bg-indigo-600 text-white rounded-2xl font-black shadow-lg">確認發佈</button></div>
+                                    <div className="flex gap-3 text-center"><button type="button" onClick={() => setIsMasterModalOpen(false)} className="flex-1 font-bold text-slate-400">取消</button><button type="submit" className="flex-1 py-4 bg-indigo-600 text-white rounded-2xl font-black shadow-lg text-sm">確認儲存</button></div>
                                 </form>
                             </div>
                         </div>
@@ -775,30 +693,16 @@
                     {isUserModalOpen && (
                         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-fade-in text-slate-800 text-left border">
                             <div className="bg-white w-full max-w-md rounded-[2.5rem] p-10 shadow-2xl border">
-                                <div className="flex justify-between items-start mb-6 font-bold">
-                                    <h3 className="text-2xl font-black tracking-tight">{editingUser ? '編輯帳號權限' : '新增系統帳號'}</h3>
+                                <div className="flex justify-between items-start mb-6 font-bold text-sm text-left">
+                                    <h3 className="text-2xl font-black tracking-tight text-left">{editingUser ? '編輯帳號權限' : '新增系統帳號'}</h3>
                                     <button onClick={() => {setIsUserModalOpen(false); setEditingUser(null);}} className="text-slate-300 hover:text-slate-500 transition-colors"><i className="fa-solid fa-xmark text-2xl"></i></button>
                                 </div>
-                                <form onSubmit={handleSaveUser} className="space-y-5 font-bold">
-                                    <div>
-                                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1 text-left block">帳號名稱</label>
-                                        <input name="username" defaultValue={editingUser?.username} readOnly={!!editingUser} required className={`w-full p-4 rounded-2xl border-2 outline-none font-bold transition-all ${editingUser ? 'bg-slate-50 border-transparent text-slate-400' : 'bg-white border-slate-100 focus:border-indigo-600'}`} />
-                                    </div>
-                                    <div>
-                                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1 text-left block">密碼設定</label>
-                                        <input name="password" defaultValue={editingUser?.password} required placeholder="請輸入密碼" className="w-full bg-slate-50 p-4 rounded-2xl border-2 border-transparent focus:border-indigo-600 outline-none font-bold text-slate-600" />
-                                    </div>
-                                    <div>
-                                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1 text-left block">權限角色</label>
-                                        <select name="role" defaultValue={editingUser?.role || 'sales'} disabled={editingUser && String(editingUser.username || "").toLowerCase() === 'admin'} className="w-full bg-slate-50 p-4 rounded-2xl border-2 border-transparent focus:border-indigo-600 outline-none font-bold text-slate-600">
-                                            <option value="sales">銷售人員 (Sales)</option>
-                                            <option value="admin">管理人員 (Admin)</option>
-                                        </select>
-                                    </div>
-                                    <div className="flex gap-4 pt-4 text-center font-bold">
-                                        <button type="button" onClick={() => {setIsUserModalOpen(false); setEditingUser(null);}} className="flex-1 text-slate-400 hover:text-slate-600 transition-colors">取消</button>
-                                        <button type="submit" className="flex-1 py-4 bg-indigo-600 text-white rounded-2xl font-black shadow-lg hover:bg-indigo-700 active:scale-95 transition-all">確認修改</button>
-                                    </div>
+                                <form onSubmit={handleSaveUser} className="space-y-5 font-bold text-sm text-left">
+                                    <div className="text-left"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1 text-left block">登入帳號名稱</label><input name="username" defaultValue={editingUser?.username} readOnly={!!editingUser} required className={`w-full p-4 rounded-2xl border-2 outline-none font-bold transition-all ${editingUser ? 'bg-slate-50 border-transparent text-slate-400' : 'bg-white border-slate-100 focus:border-indigo-600'}`} /></div>
+                                    <div className="text-left"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1 text-left block">使用人姓名 (可輸入中文)</label><input name="realName" defaultValue={editingUser?.realName} required placeholder="例如：銷售員小王" className="w-full bg-slate-50 p-4 rounded-2xl border-2 border-transparent focus:border-indigo-600 outline-none font-bold text-slate-800" /></div>
+                                    <div className="text-left"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1 text-left block">密碼設定</label><input name="password" defaultValue={editingUser?.password} required placeholder="請輸入密碼" className="w-full bg-slate-50 p-4 rounded-2xl border-2 border-transparent focus:border-indigo-600 outline-none font-bold text-slate-600" /></div>
+                                    <div className="text-left"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1 text-left block">權限角色</label><select name="role" defaultValue={editingUser?.role || 'sales'} disabled={editingUser && String(editingUser.username || "").toLowerCase() === 'admin'} className="w-full bg-slate-50 p-4 rounded-2xl border-2 border-transparent focus:border-indigo-600 outline-none font-bold text-slate-600"><option value="sales">銷售人員 (Sales)</option><option value="admin">管理人員 (Admin)</option></select></div>
+                                    <div className="flex gap-4 pt-4 text-center font-bold text-sm text-center"><button type="button" onClick={() => {setIsUserModalOpen(false); setEditingUser(null);}} className="flex-1 text-slate-400 hover:text-slate-600 transition-colors">取消</button><button type="submit" className="flex-1 py-4 bg-indigo-600 text-white rounded-2xl font-black shadow-lg active:scale-95 transition-all text-center">確認修改</button></div>
                                 </form>
                             </div>
                         </div>
