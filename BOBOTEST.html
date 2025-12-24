@@ -35,7 +35,7 @@
         const { useState, useEffect, useMemo, useRef } = React;
 
         // ==========================================
-        // 1. Firebase 配置金鑰 (已修正語法錯誤)
+        // 1. Firebase 配置金鑰
         // ==========================================
         const MY_FIREBASE_CONFIG = {
             apiKey: "AIzaSyC3ryVnW-6ZIG9ZuK56I9kNabcKOi89FUQ",
@@ -52,6 +52,7 @@
             const [loading, setLoading] = useState(true);
             const [db, setDb] = useState(null);
             const [appId, setAppId] = useState('keyhub-pro-v1'); 
+            const [errorMsg, setErrorMsg] = useState(null); // 新增錯誤訊息狀態
             
             const [products, setProducts] = useState([]);
             const [inventory, setInventory] = useState([]);
@@ -71,8 +72,8 @@
             useEffect(() => {
                 const initFirebase = async () => {
                     try {
-                        // 修正：檢查是否仍為預設預留字串
                         if (!MY_FIREBASE_CONFIG.apiKey || MY_FIREBASE_CONFIG.apiKey.includes("你的API")) {
+                            setErrorMsg("尚未設定 Firebase API Key。");
                             setLoading(false);
                             return;
                         }
@@ -81,7 +82,7 @@
                         const auth = firebase.auth();
                         const firestore = firebase.firestore();
 
-                        // 匿名登入
+                        // 匿名登入 (這是多人共用的關鍵)
                         await auth.signInAnonymously();
 
                         setDb(firestore);
@@ -89,6 +90,12 @@
 
                     } catch (err) {
                         console.error("Firebase 連線失敗:", err);
+                        // 針對網域未授權的常見錯誤提供提示
+                        if (err.code === 'auth/unauthorized-domain') {
+                            setErrorMsg("此網域尚未在 Firebase 授權。請將 github.io 加入 Firebase 的授權網域清單。");
+                        } else {
+                            setErrorMsg("系統連線失敗: " + err.message);
+                        }
                         setLoading(false);
                     }
                 };
@@ -98,26 +105,36 @@
             const setupDataSync = (dbInstance, id) => {
                 const dataRef = dbInstance.collection('artifacts').doc(id).collection('public').doc('data');
 
+                // 錯誤處理：監聽失敗時顯示
+                const handleError = (err) => {
+                    console.error("Firestore Error:", err);
+                    if (err.message.includes("permission-denied")) {
+                        setErrorMsg("資料庫權限不足，請檢查 Firebase Firestore 的 Rules 設定。");
+                    }
+                };
+
                 dataRef.collection('products').onSnapshot(snap => {
                     setProducts(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-                });
+                }, handleError);
 
                 dataRef.collection('keys').onSnapshot(snap => {
                     setInventory(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-                });
+                }, handleError);
 
                 dataRef.collection('users').onSnapshot(async (snap) => {
                     const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-                    if (!list.some(u => u.username === 'admin')) {
-                        await dataRef.collection('users').add({
-                            username: 'admin',
-                            password: '123',
-                            role: 'admin'
-                        });
+                    if (list.length === 0 || !list.some(u => u.username === 'admin')) {
+                        try {
+                            await dataRef.collection('users').add({
+                                username: 'admin',
+                                password: '123',
+                                role: 'admin'
+                            });
+                        } catch(e) { console.log("Admin 初始化跳過或失敗"); }
                     }
                     setSystemUsers(list);
                     setLoading(false);
-                });
+                }, handleError);
             };
 
             const stockOverview = useMemo(() => {
@@ -136,8 +153,8 @@
             const handleLogin = (e) => {
                 e.preventDefault();
                 const user = systemUsers.find(u => 
-                    u.username === loginForm.username.trim() && 
-                    u.password === loginForm.password.trim()
+                    String(u.username).trim() === loginForm.username.trim() && 
+                    String(u.password).trim() === loginForm.password.trim()
                 );
                 if (user) {
                     setAppUser(user);
@@ -186,14 +203,17 @@
                 setEmailInput("");
             };
 
-            // 判斷是否需要填寫金鑰提示
-            if (!loading && (!MY_FIREBASE_CONFIG.apiKey || MY_FIREBASE_CONFIG.apiKey.includes("你的API"))) {
+            // 錯誤訊息顯示
+            if (errorMsg) {
                 return (
                     <div className="h-screen flex items-center justify-center bg-slate-100 p-6 text-center">
-                        <div className="bg-white p-8 rounded-3xl shadow-xl max-w-md">
-                            <i className="fa-solid fa-key text-amber-500 text-5xl mb-4"></i>
-                            <h2 className="text-xl font-bold mb-2">尚未正確填寫 Firebase 金鑰</h2>
-                            <p className="text-slate-500 text-sm mb-6">請檢查程式碼第 34 行的配置。確保 API Key 正確且沒有多餘引號。</p>
+                        <div className="bg-white p-8 rounded-3xl shadow-xl max-w-lg border border-red-100">
+                            <i className="fa-solid fa-triangle-exclamation text-red-500 text-5xl mb-4"></i>
+                            <h2 className="text-xl font-bold mb-4 text-slate-800">系統啟動中斷</h2>
+                            <div className="bg-red-50 p-4 rounded-xl text-red-700 text-sm font-mono text-left mb-6 break-words">
+                                {errorMsg}
+                            </div>
+                            <button onClick={() => window.location.reload()} className="bg-slate-800 text-white px-6 py-2 rounded-xl font-bold">重新整理</button>
                         </div>
                     </div>
                 );
@@ -238,26 +258,30 @@
                                 </>
                             )}
                         </div>
-                        <button onClick={() => setView('login')} className="p-2 text-slate-400 hover:text-red-500"><i className="fa-solid fa-right-from-bracket"></i></button>
+                        <button onClick={() => { setAppUser(null); setView('login'); }} className="p-2 text-slate-400 hover:text-red-500"><i className="fa-solid fa-right-from-bracket"></i></button>
                     </nav>
 
                     <main className="flex-1 max-w-7xl mx-auto w-full p-6 animate-fade-in">
                         {view === 'shop' && (
                             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-                                {products.filter(p => p.isActive).map(p => (
-                                    <div key={p.id} onClick={() => { setSelectedProduct(p); setView('detail'); }} className="bg-white p-3 rounded-3xl border border-slate-100 shadow-sm hover:shadow-lg transition-all cursor-pointer group">
-                                        <div className="aspect-square rounded-2xl overflow-hidden bg-slate-100 mb-4">
-                                            <img src={p.image} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
-                                        </div>
-                                        <div className="px-2 pb-2">
-                                            <h3 className="font-bold text-slate-800 truncate">{p.name}</h3>
-                                            <div className="flex justify-between items-center mt-2">
-                                                <span className="text-indigo-600 font-black">NT$ {p.price}</span>
-                                                <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${getStockCount(p.name) > 0 ? 'bg-green-50 text-green-600' : 'bg-red-50 text-red-600'}`}>在庫: {getStockCount(p.name)}</span>
+                                {products.length === 0 ? (
+                                    <div className="col-span-full py-20 text-center opacity-30 italic font-bold">目前尚無上架商品，請至後台新增。</div>
+                                ) : (
+                                    products.filter(p => p.isActive).map(p => (
+                                        <div key={p.id} onClick={() => { setSelectedProduct(p); setView('detail'); }} className="bg-white p-3 rounded-3xl border border-slate-100 shadow-sm hover:shadow-lg transition-all cursor-pointer group">
+                                            <div className="aspect-square rounded-2xl overflow-hidden bg-slate-100 mb-4">
+                                                <img src={p.image} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
+                                            </div>
+                                            <div className="px-2 pb-2">
+                                                <h3 className="font-bold text-slate-800 truncate">{p.name}</h3>
+                                                <div className="flex justify-between items-center mt-2">
+                                                    <span className="text-indigo-600 font-black">NT$ {p.price}</span>
+                                                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${getStockCount(p.name) > 0 ? 'bg-green-50 text-green-600' : 'bg-red-50 text-red-600'}`}>在庫: {getStockCount(p.name)}</span>
+                                                </div>
                                             </div>
                                         </div>
-                                    </div>
-                                ))}
+                                    ))
+                                )}
                             </div>
                         )}
 
@@ -317,7 +341,7 @@
                                                     const name = row['品名'] || row.productName || row.Product;
                                                     const key = row['序號'] || row.key || row.Key;
                                                     if (name && key) {
-                                                        await col.add({ productName: String(name), key: String(key), status: 'available', importTime: new Date().toISOString() });
+                                                        await col.add({ productName: String(name).trim(), key: String(key).trim(), status: 'available', importTime: new Date().toISOString() });
                                                         count++;
                                                     }
                                                 }
@@ -333,94 +357,11 @@
                                             <tr><th className="px-6 py-5">產品名稱</th><th className="px-6 py-5">序號代碼</th><th className="px-6 py-5">狀態</th><th className="px-6 py-5">匯入/售出時間</th></tr>
                                         </thead>
                                         <tbody className="divide-y">
-                                            {inventory.sort((a,b) => b.importTime.localeCompare(a.importTime)).map(k => (
-                                                <tr key={k.id} className="hover:bg-slate-50 transition-colors">
-                                                    <td className="px-6 py-4 font-bold text-slate-700">{k.productName}</td>
-                                                    <td className="px-6 py-4 font-mono text-xs text-slate-500">{k.status === 'available' ? k.key : '****** (已售出)'}</td>
-                                                    <td className="px-6 py-4"><span className={`px-2 py-0.5 rounded text-[10px] font-black ${k.status === 'available' ? 'bg-green-100 text-green-600' : 'bg-slate-100 text-slate-400'}`}>{k.status === 'available' ? '在庫' : '已售'}</span></td>
-                                                    <td className="px-6 py-4 text-[10px] text-slate-400">
-                                                        {k.status === 'sold' ? '售出: ' + new Date(k.soldTime).toLocaleString() : '匯入: ' + new Date(k.importTime).toLocaleDateString()}
-                                                    </td>
-                                                </tr>
-                                            ))}
-                                        </tbody>
-                                    </table>
-                                </div>
-                            </div>
-                        )}
-                    </main>
-
-                    {/* 結帳 Modal */}
-                    {cartItem && (
-                        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4 animate-fade-in text-slate-800">
-                            <div className="bg-white w-full max-w-md rounded-[2.5rem] p-8 shadow-2xl border border-white">
-                                <h3 className="text-2xl font-black mb-6 tracking-tight">結帳確認</h3>
-                                <div className="bg-slate-50 p-5 rounded-[2rem] mb-6 flex gap-4 items-center border border-slate-100">
-                                    <img src={cartItem.image} className="w-16 h-16 rounded-2xl object-cover shadow-sm" />
-                                    <div><p className="font-bold">{cartItem.name}</p><p className="text-indigo-600 font-black text-xl">NT$ {cartItem.price}</p></div>
-                                </div>
-                                <div className="space-y-4 mb-8">
-                                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">顧客 Email (用於接收序號)</label>
-                                    <input type="email" placeholder="example@gmail.com" className="w-full bg-slate-50 p-4 rounded-2xl border-2 border-slate-100 outline-none focus:border-indigo-600 font-bold transition-all" value={emailInput} onChange={e => setEmailInput(e.target.value)} />
-                                </div>
-                                <div className="flex gap-3">
-                                    <button onClick={() => setCartItem(null)} className="flex-1 py-4 font-bold text-slate-400 transition-colors hover:text-slate-600">取消</button>
-                                    <button onClick={handlePurchase} className="flex-1 py-4 bg-indigo-600 text-white rounded-2xl font-black shadow-lg shadow-indigo-100 transition-all active:scale-95 hover:bg-indigo-700">確認領取</button>
-                                </div>
-                            </div>
-                        </div>
-                    )}
-
-                    {/* 編輯 Modal */}
-                    {isProductModalOpen && (
-                        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4 animate-fade-in text-slate-800">
-                            <div className="bg-white w-full max-w-2xl rounded-[3rem] p-10 shadow-2xl overflow-y-auto max-h-[90vh]">
-                                <h3 className="text-2xl font-black mb-6">{editingProduct ? '編輯商品詳情' : '建立新商品頁'}</h3>
-                                <form onSubmit={handleSaveProduct} className="space-y-6">
-                                    <div className="flex flex-col items-center gap-4 p-8 bg-slate-50 rounded-[2.5rem] border-2 border-dashed border-slate-200 text-center">
-                                        {imagePreview ? <img src={imagePreview} className="w-40 h-40 rounded-[2rem] object-cover shadow-md border-4 border-white" /> : <i className="fa-solid fa-image text-5xl text-slate-200"></i>}
-                                        <button type="button" onClick={() => fileInputRef.current.click()} className="text-xs font-bold bg-white px-6 py-2.5 rounded-xl border shadow-sm hover:bg-slate-50 transition">選擇圖片</button>
-                                        <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={e => {
-                                            const file = e.target.files[0];
-                                            if (file) {
-                                                const reader = new FileReader();
-                                                reader.onloadend = () => setImagePreview(reader.result);
-                                                reader.readAsDataURL(file);
-                                            }
-                                        }} />
-                                    </div>
-                                    <div className="grid grid-cols-2 gap-6">
-                                        <div className="space-y-1">
-                                            <label className="text-xs font-black text-slate-400 ml-1">產品名稱</label>
-                                            <input name="name" defaultValue={editingProduct?.name} required className="w-full bg-slate-50 p-4 rounded-2xl outline-none border border-slate-100 focus:border-indigo-600 font-bold" />
-                                        </div>
-                                        <div className="space-y-1">
-                                            <label className="text-xs font-black text-slate-400 ml-1">價格 (NT$)</label>
-                                            <input name="price" type="number" defaultValue={editingProduct?.price} required className="w-full bg-slate-50 p-4 rounded-2xl outline-none border border-slate-100 focus:border-indigo-600 font-bold" />
-                                        </div>
-                                    </div>
-                                    <div className="space-y-1">
-                                        <label className="text-xs font-black text-slate-400 ml-1">產品描述</label>
-                                        <textarea name="description" rows="4" defaultValue={editingProduct?.description} className="w-full bg-slate-50 p-4 rounded-2xl outline-none border border-slate-100 focus:border-indigo-600 font-medium" />
-                                    </div>
-                                    <div className="flex items-center gap-3 bg-indigo-50 p-5 rounded-2xl border border-indigo-100">
-                                        <input name="isActive" type="checkbox" id="active" defaultChecked={editingProduct?.isActive ?? true} className="w-5 h-5 accent-indigo-600" />
-                                        <label htmlFor="active" className="text-sm font-bold text-indigo-700 cursor-pointer">立即上架顯示在商店</label>
-                                    </div>
-                                    <div className="flex gap-4 pt-4 text-center">
-                                        <button type="button" onClick={() => setIsProductModalOpen(false)} className="flex-1 font-bold text-slate-400 transition-colors hover:text-slate-600">取消</button>
-                                        <button type="submit" className="flex-1 py-4 bg-indigo-600 text-white rounded-2xl font-black shadow-lg shadow-indigo-100 transition-all active:scale-95 hover:bg-indigo-700">儲存並同步</button>
-                                    </div>
-                                </form>
-                            </div>
-                        </div>
-                    )}
-                </div>
-            );
-        };
-
-        const root = ReactDOM.createRoot(document.getElementById('root'));
-        root.render(<App />);
-    </script>
-</body>
-</html>
+                                            {inventory.length === 0 ? (
+                                                <tr><td colSpan="4" className="text-center py-10 opacity-30">無序號紀錄。</td></tr>
+                                            ) : (
+                                                inventory.sort((a,b) => (b.importTime || "").localeCompare(a.importTime || "")).map(k => (
+                                                    <tr key={k.id} className="hover:bg-slate-50 transition-colors">
+                                                        <td className="px-6 py-4 font-bold text-slate-700">{k.productName}</td>
+                                                        <td className="px-6 py-4 font-mono text-xs text-slate-500">{k.status === 'available' ? k.key : '****** (已售出)'}</td>
+                                                        <td className="px-6 py-4"><span className={`px-2 py-0.5 rounded text-[10px] font-
